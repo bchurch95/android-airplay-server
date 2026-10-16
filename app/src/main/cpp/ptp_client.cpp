@@ -158,6 +158,7 @@ void PtpClient::eventLoop() {
 
                 mOffsetNs.store(smoothed, std::memory_order_release);
                 mSynced.store(true, std::memory_order_release);
+                setPtpOffsetNs(smoothed);
             }
         }
     }

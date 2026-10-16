@@ -82,6 +82,8 @@
     <!-- Settings: Server -->
     <string name="setting_server_name">Server name</string>
     <string name="setting_server_port">Server port</string>
+    <string name="setting_device_model">Device Profile</string>
+    <string name="setting_device_model_desc">AirPort Express enables AirPlay 2 multi-room audio with checkboxes; Apple TV enables screen mirroring</string>
     <string name="setting_auto_start">Start server automatically</string>
     <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>
     <string name="setting_boot_auto_start">Start server at boot</string>

@@ -189,6 +189,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _launchOnConnect = MutableStateFlow(prefs.getBoolean(Prefs.LAUNCH_ON_CONNECT, Prefs.DEF_LAUNCH_ON_CONNECT))
     val launchOnConnect: StateFlow<Boolean> = _launchOnConnect.asStateFlow()
 
+    private val _deviceModel = MutableStateFlow(prefs.getString(Prefs.DEVICE_MODEL, Prefs.DEF_DEVICE_MODEL) ?: Prefs.DEF_DEVICE_MODEL)
+    val deviceModel: StateFlow<String> = _deviceModel.asStateFlow()
+
     // debug
     private val _debugEnabled = MutableStateFlow(prefs.getBoolean(Prefs.DEBUG_ENABLED, Prefs.DEF_DEBUG_ENABLED))
     val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
@@ -405,6 +408,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
     fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
     fun setAdvertiseAudio(v: Boolean) { _advertiseAudio.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_AUDIO, v).apply(); _applyByServerRestart() }
+    fun setDeviceModel(v: String) { _deviceModel.value = v; prefs.edit().putString(Prefs.DEVICE_MODEL, v).apply(); _applyByServerRestart() }
     fun setLaunchOnConnect(v: Boolean) { _launchOnConnect.value = v; prefs.edit().putBoolean(Prefs.LAUNCH_ON_CONNECT, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
     fun setDeveloperOptions(v: Boolean) {

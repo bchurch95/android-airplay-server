@@ -1,5 +1,5 @@
 diff --git a/lib/global.h b/lib/global.h
-index 03f2dcb..c2f1c08 100644
+index 03f2dcb..2206aea 100644
 --- a/lib/global.h
 +++ b/lib/global.h
 @@ -18,8 +18,8 @@
@@ -8,16 +8,16 @@ index 03f2dcb..c2f1c08 100644
  
 -#define GLOBAL_MODEL    "AppleTV3,2"
 -#define GLOBAL_VERSION  "220.68"
-+#define GLOBAL_MODEL    "AppleTV6,2"
++#define GLOBAL_MODEL    "AirPort10,115"
 +#define GLOBAL_VERSION  "380.20.1"
  
  /* use old protocol for audio AES key if client's User-Agent string is contained in these strings */
  /* replace xxx by any new User-Agent string as needed */
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index 7123c96..7aa6904 100644
+index 7123c96..516c315 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -53,18 +53,8 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+@@ -53,30 +53,23 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
  
      plist_t r_node = plist_new_dict();
  
@@ -34,11 +34,19 @@ index 7123c96..7aa6904 100644
 -     */
 -    plist_t features_node = plist_new_uint(0x27F); 
 +    uint64_t features = dnssd_get_airplay_features(raop->dnssd);
-+    plist_t features_node = plist_new_uint(features); 
++    plist_t features_node = plist_new_uint(features);
      plist_dict_set_item(r_node, "features", features_node);
  
      plist_t mac_address_node = plist_new_string(hw_addr);
-@@ -76,7 +66,7 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     plist_dict_set_item(r_node, "macAddress", mac_address_node);
+ 
+-    plist_t model_node = plist_new_string(GLOBAL_MODEL);
++    extern const char *android_dnssd_get_model(void);
++    const char *model_str = android_dnssd_get_model();
++    if (!model_str || !strlen(model_str)) model_str = GLOBAL_MODEL;
++    plist_t model_node = plist_new_string(model_str);
+     plist_dict_set_item(r_node, "model", model_node);
+ 
      plist_t os_build_node = plist_new_string("12B435");
      plist_dict_set_item(r_node, "osBuildVersion", os_build_node);
  
@@ -47,7 +55,7 @@ index 7123c96..7aa6904 100644
      plist_dict_set_item(r_node, "protovers", protovers_node);
  
      plist_t source_version_node = plist_new_string(GLOBAL_VERSION);
-@@ -88,15 +78,40 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+@@ -88,15 +81,40 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
      plist_t device_id_node = plist_new_string(hw_addr);
      plist_dict_set_item(r_node, "deviceid", device_id_node);
  
@@ -227,7 +235,7 @@ index c86393f..69f38d8 100644
  
      if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..bb5b61f 100644
+index b779ece..0b1c595 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -106,7 +106,7 @@ raop_handler_info(raop_conn_t *conn,
@@ -264,7 +272,15 @@ index b779ece..bb5b61f 100644
      plist_t vv_node = plist_new_uint(strtol(AIRPLAY_VV, NULL, 10));
      plist_dict_set_item(res_node, "vv", vv_node);
  
-@@ -161,7 +175,7 @@ raop_handler_info(raop_conn_t *conn,
+@@ -157,11 +171,14 @@ raop_handler_info(raop_conn_t *conn,
+     plist_t keep_alive_send_stats_as_body_node = plist_new_bool(1);
+     plist_dict_set_item(res_node, "keepAliveSendStatsAsBody", keep_alive_send_stats_as_body_node);
+ 
+-    plist_t model_node = plist_new_string(GLOBAL_MODEL);
++    extern const char *android_dnssd_get_model(void);
++    const char *model_str = android_dnssd_get_model();
++    if (!model_str || !strlen(model_str)) model_str = GLOBAL_MODEL;
++    plist_t model_node = plist_new_string(model_str);
      plist_dict_set_item(res_node, "model", model_node);
  
      /* dont need anything below here in the Bluetooth LE response */
@@ -273,3 +289,73 @@ index b779ece..bb5b61f 100644
          goto finished;
      }
  
+@@ -862,16 +879,20 @@ raop_handler_setup(raop_conn_t *conn,
+         timing_protocol_t time_protocol = TP_NONE;
+         plist_t req_timing_protocol_node = plist_dict_get_item(req_root_node, "timingProtocol");
+         plist_get_string_val(req_timing_protocol_node, &timing_protocol);
++        bool is_ptp = false;
+         if (timing_protocol) {
+              int string_len = strlen(timing_protocol);
+              if (strncmp(timing_protocol, "NTP", string_len) == 0) {
+                  time_protocol = NTP;
+              } else if (strncmp(timing_protocol, "None", string_len) == 0) {
+                  time_protocol = TP_NONE;
++             } else if (strncasecmp(timing_protocol, "PTP", 3) == 0) {
++                 time_protocol = TP_OTHER;
++                 is_ptp = true;
+              } else {
+                  time_protocol = TP_OTHER;
+              }
+-             if (time_protocol != NTP) {
++             if (time_protocol != NTP && !is_ptp) {
+                  logger_log(raop->logger, LOGGER_ERR, "Client specified timingProtocol=%s,"
+                             " but timingProtocol= NTP is required here", timing_protocol);
+              }
+@@ -889,6 +910,8 @@ raop_handler_setup(raop_conn_t *conn,
+         }
+         if (timing_rport) {
+             logger_log(raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
++        } else if (is_ptp) {
++            logger_log(raop->logger, LOGGER_INFO, "Client using PTP timing (IEEE 1588 ports 319/320)");
+         } else {
+             logger_log(raop->logger, LOGGER_ERR, "Client did not supply timing_rport,"
+                        " may be using unsupported AirPlay2 \"Remote Control\" protocol");
+@@ -910,7 +933,9 @@ raop_handler_setup(raop_conn_t *conn,
+         }
+         conn->raop_ntp = raop_ntp_init(raop->logger, &raop->callbacks, remote,
+                                        conn->remotelen, (unsigned short) timing_rport, &time_protocol);
+-        raop_ntp_start(conn->raop_ntp, &timing_lport);
++        if (timing_rport) {
++            raop_ntp_start(conn->raop_ntp, &timing_lport);
++        }
+         conn->raop_rtp = raop_rtp_init(raop->logger, &raop->callbacks, conn->raop_ntp,
+                                        remote, conn->remotelen, aeskey, aesiv);
+         conn->raop_rtp_mirror = raop_rtp_mirror_init(raop->logger, &raop->callbacks,
+@@ -919,11 +944,24 @@ raop_handler_setup(raop_conn_t *conn,
+         /* the event port is not used in mirror mode or audio mode */
+         unsigned short event_port = 0;
+         plist_t res_event_port_node = plist_new_uint(event_port);
+-        plist_t res_timing_port_node = plist_new_uint(timing_lport);
+-        plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);
+         plist_dict_set_item(res_root_node, "eventPort", res_event_port_node);
+ 
+-        logger_log(raop->logger, LOGGER_DEBUG, "eport = %d, tport = %d", event_port, timing_lport);
++        if (is_ptp) {
++            plist_t res_timing_port_node = plist_new_uint(0);
++            plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);
++
++            plist_t timing_peer_info = plist_new_dict();
++            plist_t addresses_array = plist_new_array();
++            plist_array_append_item(addresses_array, plist_new_string(remote));
++            plist_dict_set_item(timing_peer_info, "Addresses", addresses_array);
++            plist_dict_set_item(timing_peer_info, "ID", plist_new_string(remote));
++            plist_dict_set_item(res_root_node, "timingPeerInfo", timing_peer_info);
++        } else {
++            plist_t res_timing_port_node = plist_new_uint(timing_lport);
++            plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);
++        }
++
++        logger_log(raop->logger, LOGGER_DEBUG, "eport = %d, tport = %d", event_port, is_ptp ? 0 : timing_lport);
+     }
+ 
+     // Process stream setup requests

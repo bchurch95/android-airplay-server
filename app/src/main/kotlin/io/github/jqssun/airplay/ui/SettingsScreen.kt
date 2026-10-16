@@ -69,6 +69,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val audioCushionMs by viewModel.audioCushionMs.collectAsState()
     val audioAdaptiveStep by viewModel.audioAdaptiveStep.collectAsState()
     val oboeBufferFrames by viewModel.oboeBufferFrames.collectAsState()
+    val deviceModel by viewModel.deviceModel.collectAsState()
 
     Column(
         modifier = Modifier
@@ -89,6 +90,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
             value = serverPort.toString(),
             onCommit = { viewModel.setServerPort(it.toInt()) },
             range = 1..65535
+        )
+
+        SettingChips(
+            title = stringResource(R.string.setting_device_model),
+            description = stringResource(R.string.setting_device_model_desc),
+            value = deviceModel,
+            options = listOf(
+                Prefs.MODEL_AIRPORT to "AirPort Express (Multi-room Audio)",
+                Prefs.MODEL_APPLETV_4K to "Apple TV 4K (Screen Mirroring)",
+                Prefs.MODEL_APPLETV_3 to "Apple TV 3 (Legacy)",
+            ),
+            onValueChange = { viewModel.setDeviceModel(it) }
         )
 
         SettingSwitch(
