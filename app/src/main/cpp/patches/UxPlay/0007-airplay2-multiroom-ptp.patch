@@ -227,9 +227,18 @@ index c86393f..69f38d8 100644
  
      if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..1128819 100644
+index b779ece..bb5b61f 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
+@@ -106,7 +106,7 @@ raop_handler_info(raop_conn_t *conn,
+     }
+   
+     /* don't need anything below here in the response to initial  "txtAirPlay" GET/info request */
+-    if (content_type) {
++    if (add_txt_airplay || add_txt_raop) {
+         goto finished;
+     }
+  
 @@ -139,9 +139,23 @@ raop_handler_info(raop_conn_t *conn,
      plist_t name_node = plist_new_string(name);
      plist_dict_set_item(res_node, "name", name_node);

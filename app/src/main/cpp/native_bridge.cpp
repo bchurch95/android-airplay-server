@@ -74,7 +74,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     }
     ctx->cb_ctx.raop = ctx->raop;
 
-    raop_set_log_level(ctx->raop, LOGGER_INFO);
+    raop_set_log_level(ctx->raop, LOGGER_DEBUG);
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
@@ -148,7 +148,6 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
 
     /* Register dnssd records (stored in shim, Kotlin reads them) */
     if (ctx->dnssd) {
-        dnssd_set_airplay_features(ctx->dnssd, 38, 1); // Supports Unified Media Control
         dnssd_set_airplay_features(ctx->dnssd, 40, 1); // Supports Buffered Audio
         dnssd_set_airplay_features(ctx->dnssd, 41, 1); // Supports PTP
         dnssd_register_raop(ctx->dnssd, port);

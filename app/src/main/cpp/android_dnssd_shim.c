@@ -31,10 +31,30 @@ typedef struct {
     txt_record_t raop_record;
     txt_record_t airplay_record;
 
+    char raop_packed[1024];
+    int raop_packed_len;
+
+    char airplay_packed[1024];
+    int airplay_packed_len;
+
     char codec_cn[16]; /* dynamic "cn" value, e.g. "0,1,2,3" */
 
     char raop_servname[MAX_SERVNAME];
 } dnssd_private_t;
+
+static void _pack_record(txt_record_t *rec, char *out_buf, int *out_len, int max_len) {
+    int pos = 0;
+    for (int i = 0; i < rec->count; i++) {
+        char item[256];
+        int item_len = snprintf(item, sizeof(item), "%s=%s", rec->entries[i].key, rec->entries[i].val);
+        if (item_len > 0 && item_len < 256 && pos + item_len + 1 <= max_len) {
+            out_buf[pos++] = (char)(unsigned char)item_len;
+            memcpy(out_buf + pos, item, (size_t)item_len);
+            pos += item_len;
+        }
+    }
+    *out_len = pos;
+}
 
 static dnssd_private_t *_priv(dnssd_t *dnssd) {
     assert(dnssd && dnssd->dnssd_private);
@@ -151,6 +171,7 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     }
     strncat(priv->raop_servname, "@", sizeof(priv->raop_servname) - strlen(priv->raop_servname) - 1);
     strncat(priv->raop_servname, dnssd->name, sizeof(priv->raop_servname) - strlen(priv->raop_servname) - 1);
+    _pack_record(rec, priv->raop_packed, &priv->raop_packed_len, sizeof(priv->raop_packed));
     return 0;
 }
 
@@ -202,6 +223,7 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "pi", pi_unique);
     _txt_set(rec, "srcvers", GLOBAL_VERSION);
     _txt_set(rec, "vv", AIRPLAY_VV);
+    _pack_record(rec, priv->airplay_packed, &priv->airplay_packed_len, sizeof(priv->airplay_packed));
     return 0;
 }
 
@@ -210,13 +232,23 @@ void dnssd_unregister_raop(dnssd_t *dnssd) {}
 void dnssd_unregister_airplay(dnssd_t *dnssd) {}
 
 const char *dnssd_get_raop_txt(dnssd_t *dnssd, int *length) {
-    if (length) *length = 0;
-    return NULL;
+    if (!dnssd || !dnssd->dnssd_private) {
+        if (length) *length = 0;
+        return NULL;
+    }
+    dnssd_private_t *priv = _priv(dnssd);
+    if (length) *length = priv->raop_packed_len;
+    return priv->raop_packed;
 }
 
 const char *dnssd_get_airplay_txt(dnssd_t *dnssd, int *length) {
-    if (length) *length = 0;
-    return NULL;
+    if (!dnssd || !dnssd->dnssd_private) {
+        if (length) *length = 0;
+        return NULL;
+    }
+    dnssd_private_t *priv = _priv(dnssd);
+    if (length) *length = priv->airplay_packed_len;
+    return priv->airplay_packed;
 }
 
 /* --- Android-specific accessors for JNI layer --- */
