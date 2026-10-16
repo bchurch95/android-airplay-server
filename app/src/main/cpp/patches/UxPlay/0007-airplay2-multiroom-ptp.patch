@@ -104,7 +104,7 @@ index 7123c96..857c587 100644
      http_response_add_header(response, "Content-Type", "text/x-apple-plist+xml");
      free(hw_addr);
 diff --git a/lib/http_request.c b/lib/http_request.c
-index ec030c4..ff6a503 100644
+index ec030c4..49adf62 100644
 --- a/lib/http_request.c
 +++ b/lib/http_request.c
 @@ -29,6 +29,7 @@ struct http_request_s {
@@ -125,7 +125,7 @@ index ec030c4..ff6a503 100644
          free(request->url);
          for (int i = 0; i < request->headers_size; i++) {
              free(request->headers[i]);
-@@ -182,7 +186,58 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
+@@ -182,7 +186,94 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
  {
      assert(request);
  
@@ -174,6 +174,42 @@ index ec030c4..ff6a503 100644
 +                memcpy(allocated, "POST      ", 10);
 +                parse_data = allocated;
 +            }
++        } else if (!strncmp(data, "LOUDNESSNORMALIZATION ", 22)) {
++            request->custom_method = strdup("LOUDNESSNORMALIZATION");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST                  ", 22);
++                parse_data = allocated;
++            }
++        } else {
++            /* Generic custom RTSP method fallback */
++            const char *sp = memchr(data, ' ', (datalen < 32 ? datalen : 32));
++            if (sp && sp - data >= 4) {
++                int mlen = (int)(sp - data);
++                bool is_upper = true;
++                for (int i = 0; i < mlen; i++) {
++                    if (data[i] < 'A' || data[i] > 'Z') { is_upper = false; break; }
++                }
++                if (is_upper && strncmp(data, "POST", 4) && strncmp(data, "GET", 3) &&
++                    strncmp(data, "SETUP", 5) && strncmp(data, "RECORD", 6) &&
++                    strncmp(data, "OPTIONS", 7) && strncmp(data, "TEARDOWN", 8) &&
++                    strncmp(data, "ANNOUNCE", 8) && strncmp(data, "PUT", 3)) {
++                    char *mname = malloc(mlen + 1);
++                    if (mname) {
++                        memcpy(mname, data, mlen);
++                        mname[mlen] = 0;
++                        request->custom_method = mname;
++                        allocated = malloc(datalen);
++                        if (allocated) {
++                            memcpy(allocated, data, datalen);
++                            memcpy(allocated, "POST", 4);
++                            memset(allocated + 4, ' ', mlen - 4);
++                            parse_data = allocated;
++                        }
++                    }
++                }
++            }
 +        }
 +    }
 +
@@ -185,7 +221,7 @@ index ec030c4..ff6a503 100644
  
      /* support for "Upgrade" to reverse http ("PTTH/1.0") protocol */
      llhttp_resume_after_upgrade(&request->parser);
-@@ -234,6 +289,9 @@ http_request_get_method(http_request_t *request)
+@@ -234,6 +325,9 @@ http_request_get_method(http_request_t *request)
      if (request->is_reverse) {
          return NULL;
      }
@@ -196,7 +232,7 @@ index ec030c4..ff6a503 100644
  }
  
 diff --git a/lib/raop.c b/lib/raop.c
-index c86393f..9f1207d 100644
+index c86393f..b0d3f39 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
 @@ -122,6 +122,11 @@ struct raop_conn_s {
@@ -315,7 +351,7 @@ index c86393f..9f1207d 100644
              }
          } else if (!strcmp(method, "GET")) {
              if (!strcmp(url, "/server-info")) {
-@@ -468,14 +454,39 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -468,14 +454,41 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_server_info;
              } else if (!strcmp(url, "/playback-info")) {
                  handler = &http_handler_playback_info;
@@ -343,6 +379,8 @@ index c86393f..9f1207d 100644
 +            handler = &raop_handler_flush;
 +        } else if (!strcmp(method, "FLUSHBUFFERED")) {
 +            handler = &raop_handler_flushbuffered;
++        } else if (!strcmp(method, "LOUDNESSNORMALIZATION")) {
++            handler = &raop_handler_loudnessnormalization;
 +        } else if (!strcmp(method, "TEARDOWN")) {
 +            handler = &raop_handler_teardown;
          } else if (!strcmp(method, "PUT")) {
@@ -357,7 +395,7 @@ index c86393f..9f1207d 100644
      }
  
      if (handler != NULL) {
-@@ -574,6 +585,10 @@ conn_destroy(void *ptr) {
+@@ -574,6 +587,10 @@ conn_destroy(void *ptr) {
      if (conn->raop_ntp) {
          raop_ntp_destroy(conn->raop_ntp);
      }
@@ -369,7 +407,7 @@ index c86393f..9f1207d 100644
      if (raop->callbacks.video_flush) {
          raop->callbacks.video_flush(raop->callbacks.cls);
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..4f3bc17 100644
+index b779ece..34ba2db 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -1,3 +1,4 @@
@@ -500,7 +538,7 @@ index b779ece..4f3bc17 100644
                       char **response_data, int *response_datalen)
  {
 -    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
-+    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETPEERSX, SETRATEANCHORTIME, ANNOUNCE");
++    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETPEERSX, SETRATEANCHORTIME, LOUDNESSNORMALIZATION, ANNOUNCE");
  }
  
  static void
@@ -774,7 +812,7 @@ index b779ece..4f3bc17 100644
                  plist_array_append_item(res_streams_node, res_stream_node);
  
                  break;
-@@ -1214,6 +1441,109 @@ raop_handler_record(raop_conn_t *conn,
+@@ -1214,6 +1441,119 @@ raop_handler_record(raop_conn_t *conn,
      http_response_add_header(response, "Audio-Jack-Status", "connected; type=analog");
  }
  
@@ -881,10 +919,20 @@ index b779ece..4f3bc17 100644
 +    }
 +}
 +
++static void
++raop_handler_loudnessnormalization(raop_conn_t *conn,
++                                   http_request_t *request, http_response_t *response,
++                                   char **response_data, int *response_datalen)
++{
++    raop_t *raop = conn->raop;
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_loudnessnormalization: acknowledged");
++    http_response_add_header(response, "Audio-Jack-Status", "connected; type=digital");
++}
++
  static void
  raop_handler_flush(raop_conn_t *conn,
                        http_request_t *request, http_response_t *response,
-@@ -1259,7 +1589,7 @@ raop_handler_teardown(raop_conn_t *conn,
+@@ -1259,7 +1599,7 @@ raop_handler_teardown(raop_conn_t *conn,
              plist_t req_stream_node = plist_array_get_item(req_streams_node,i);
              plist_t req_stream_type_node = plist_dict_get_item(req_stream_node, "type");
              plist_get_uint_val(req_stream_type_node, &val);
@@ -893,7 +941,7 @@ index b779ece..4f3bc17 100644
                  teardown_96 = true;
              } else if (val == 110) { 
                  teardown_110 = true;
-@@ -1269,7 +1599,7 @@ raop_handler_teardown(raop_conn_t *conn,
+@@ -1269,7 +1609,7 @@ raop_handler_teardown(raop_conn_t *conn,
      plist_free(req_root_node);
      logger_log(raop->logger, LOGGER_DEBUG, "TEARDOWN request,  96=%d, 110=%d", teardown_96, teardown_110);
    

@@ -57,6 +57,42 @@ hr_repl = hr_target + ''' else if (!strncmp(data, "FLUSHBUFFERED ", 14)) {
                 memcpy(allocated, "POST      ", 10);
                 parse_data = allocated;
             }
+        } else if (!strncmp(data, "LOUDNESSNORMALIZATION ", 22)) {
+            request->custom_method = strdup("LOUDNESSNORMALIZATION");
+            allocated = malloc(datalen);
+            if (allocated) {
+                memcpy(allocated, data, datalen);
+                memcpy(allocated, "POST                  ", 22);
+                parse_data = allocated;
+            }
+        } else {
+            /* Generic custom RTSP method fallback */
+            const char *sp = memchr(data, ' ', (datalen < 32 ? datalen : 32));
+            if (sp && sp - data >= 4) {
+                int mlen = (int)(sp - data);
+                bool is_upper = true;
+                for (int i = 0; i < mlen; i++) {
+                    if (data[i] < 'A' || data[i] > 'Z') { is_upper = false; break; }
+                }
+                if (is_upper && strncmp(data, "POST", 4) && strncmp(data, "GET", 3) &&
+                    strncmp(data, "SETUP", 5) && strncmp(data, "RECORD", 6) &&
+                    strncmp(data, "OPTIONS", 7) && strncmp(data, "TEARDOWN", 8) &&
+                    strncmp(data, "ANNOUNCE", 8) && strncmp(data, "PUT", 3)) {
+                    char *mname = malloc(mlen + 1);
+                    if (mname) {
+                        memcpy(mname, data, mlen);
+                        mname[mlen] = 0;
+                        request->custom_method = mname;
+                        allocated = malloc(datalen);
+                        if (allocated) {
+                            memcpy(allocated, data, datalen);
+                            memcpy(allocated, "POST", 4);
+                            memset(allocated + 4, ' ', mlen - 4);
+                            parse_data = allocated;
+                        }
+                    }
+                }
+            }
         }'''
 assert hr_target in hr, "hr_target not found in http_request.c"
 hr = hr.replace(hr_target, hr_repl, 1)
@@ -132,7 +168,9 @@ repl_methods = '''        } else if (!strcmp(method, "SETPEERS") || !strcmp(meth
         } else if (!strcmp(method, "FLUSH")) {
             handler = &raop_handler_flush;
         } else if (!strcmp(method, "FLUSHBUFFERED")) {
-            handler = &raop_handler_flushbuffered;'''
+            handler = &raop_handler_flushbuffered;
+        } else if (!strcmp(method, "LOUDNESSNORMALIZATION")) {
+            handler = &raop_handler_loudnessnormalization;'''
 assert target_methods in c, "target_methods not found in raop.c"
 c = c.replace(target_methods, repl_methods, 1)
 
@@ -216,7 +254,7 @@ assert target_opt in c, "target_opt not found in raop_handlers.h"
 c = c.replace(target_opt, announce_code + '\n' + target_opt, 1)
 
 pub_target = '"SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETRATEANCHORTIME"'
-pub_repl = '"SETUP, RECORD, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETPEERSX, SETRATEANCHORTIME, ANNOUNCE"'
+pub_repl = '"SETUP, RECORD, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETPEERSX, SETRATEANCHORTIME, LOUDNESSNORMALIZATION, ANNOUNCE"'
 assert pub_target in c, "pub_target not found in raop_handlers.h"
 c = c.replace(pub_target, pub_repl, 1)
 
@@ -521,6 +559,16 @@ raop_handler_flushbuffered(raop_conn_t *conn,
     if (conn->raop_rtp) {
         raop_rtp_flush_buffered(conn->raop_rtp, flush_from_seq, flush_until_seq, (uint32_t)flush_until_ts);
     }
+}
+
+static void
+raop_handler_loudnessnormalization(raop_conn_t *conn,
+                                   http_request_t *request, http_response_t *response,
+                                   char **response_data, int *response_datalen)
+{
+    raop_t *raop = conn->raop;
+    logger_log(raop->logger, LOGGER_INFO, "raop_handler_loudnessnormalization: acknowledged");
+    http_response_add_header(response, "Audio-Jack-Status", "connected; type=digital");
 }'''
 assert setrate_target in c, "setrate_target not found in raop_handlers.h"
 c = c.replace(setrate_target, setrate_repl, 1)
