@@ -274,7 +274,7 @@ public:
     }
 
     // consumer: pop frames*channels samples into out, silence-padded on underrun
-    void read(int16_t *out, int32_t frames) {
+    void read(int16_t *out, int32_t frames, int64_t hardwareLatencyNs = 0) {
         if (mFlushRequested.exchange(false, std::memory_order_acquire)) {
             mRing.skip(mRing.available());
             mHeadPtsNs.store(0, std::memory_order_release);
@@ -291,7 +291,10 @@ public:
         size_t leadSilenceFrames = 0;
         if (headPts > 0) {
             mPriming = false;
-            int64_t leadNs = headPts - now;
+            // Frame 0 written to the buffer at 'now' reaches the DAC/speaker at (now + hardwareLatencyNs).
+            // Scheduled playout condition: now + hardwareLatencyNs == headPts
+            const int64_t playoutNowNs = now + hardwareLatencyNs;
+            const int64_t leadNs = headPts - playoutNowNs;
             const int64_t burstNs = (int64_t)frames * NS_PER_SEC / mSampleRate;
             if (leadNs > burstNs) {
                 // Scheduled in future (> 1 callback buffer ahead): output silence while waiting

@@ -25,9 +25,26 @@ public:
     OboeCallbacks(std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log)
         : mTimeline(std::move(timeline)), mLog(std::move(log)) {}
 
-    oboe::DataCallbackResult onAudioReady(oboe::AudioStream *, void *audioData,
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream, void *audioData,
                                           int32_t numFrames) override {
-        mTimeline->read(static_cast<int16_t *>(audioData), numFrames);
+        int64_t hwLatencyNs = 0;
+        auto latResult = stream->calculateLatencyMillis();
+        if (latResult) {
+            hwLatencyNs = (int64_t)(latResult.value() * 1000000.0);
+        } else {
+            int bufFrames = stream->getBufferSizeInFrames();
+            int sampleRate = stream->getSampleRate();
+            if (sampleRate > 0) {
+                // Buffer queued frames + 25ms AudioFlinger/DSP DAC path
+                hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate + 25000000LL;
+            }
+        }
+        static int s_cbCount = 0;
+        if ((s_cbCount++ % 200) == 1 && mLog) {
+            mLog->info("Oboe hardware latency: %.2f ms (hwLatencyNs=%lld)",
+                       (double)hwLatencyNs / 1000000.0, (long long)hwLatencyNs);
+        }
+        mTimeline->read(static_cast<int16_t *>(audioData), numFrames, hwLatencyNs);
         return oboe::DataCallbackResult::Continue;
     }
 

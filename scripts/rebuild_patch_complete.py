@@ -950,9 +950,8 @@ raop_rtp_thread_tcp(void *arg)
             if (a_valid) {
                 int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
                 int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
-                /* 27ms acoustic DAC latency advance measured via cross-correlation with HomePod */
-                const int64_t hal_latency_ns = 27000000LL;
-                int64_t target_pts = (int64_t)a_local + off_ns - hal_latency_ns;
+                /* Target PTS is the exact presentation time scheduled by the AirPlay 2 sender */
+                int64_t target_pts = (int64_t)a_local + off_ns;
                 pts_local_ns = (uint64_t)(target_pts > 0 ? target_pts : 0);
                 /* pace: keep decoded audio at most lead_ns ahead of its play time */
                 if ((int64_t)(pts_local_ns - now_ns) <= (int64_t)lead_ns) break;
