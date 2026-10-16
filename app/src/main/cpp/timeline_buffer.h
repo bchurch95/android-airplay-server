@@ -290,6 +290,7 @@ public:
         int64_t headPts = mHeadPtsNs.load(std::memory_order_acquire);
         size_t leadSilenceFrames = 0;
         if (headPts > 0) {
+            mPriming = false;
             int64_t leadNs = headPts - now;
             const int64_t burstNs = (int64_t)frames * NS_PER_SEC / mSampleRate;
             if (leadNs > burstNs) {

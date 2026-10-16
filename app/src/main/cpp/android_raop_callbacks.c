@@ -107,12 +107,25 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
     if (!ctx->audio_engine || !data->data || data->data_len <= 0) return;
     int64_t pts_ns = 0;
     if (data->ntp_time_local > 0) {
-        struct timespec real_ts, mono_ts;
-        clock_gettime(CLOCK_REALTIME, &real_ts);
+        struct timespec mono_ts;
         clock_gettime(CLOCK_MONOTONIC, &mono_ts);
-        int64_t real_ns = (int64_t)real_ts.tv_sec * 1000000000LL + real_ts.tv_nsec;
         int64_t mono_ns = (int64_t)mono_ts.tv_sec * 1000000000LL + mono_ts.tv_nsec;
-        pts_ns = (int64_t)data->ntp_time_local + (mono_ns - real_ns);
+        if (data->ntp_time_local > 1000000000000000ULL) {
+            // Timestamp is CLOCK_REALTIME (legacy NTP): convert to CLOCK_MONOTONIC
+            struct timespec real_ts;
+            clock_gettime(CLOCK_REALTIME, &real_ts);
+            int64_t real_ns = (int64_t)real_ts.tv_sec * 1000000000LL + real_ts.tv_nsec;
+            pts_ns = (int64_t)data->ntp_time_local + (mono_ns - real_ns);
+        } else {
+            // Timestamp is already in CLOCK_MONOTONIC (AirPlay 2 anchor)
+            pts_ns = (int64_t)data->ntp_time_local;
+        }
+        static uint32_t s_pkt_log = 0;
+        if (s_pkt_log++ < 5) {
+            LOGI("_audio_process: ct=%d len=%d pts_ns=%lld (now=%lld diff=%lldms)",
+                 data->ct, data->data_len, (long long)pts_ns, (long long)mono_ns,
+                 (long long)((pts_ns - mono_ns) / 1000000LL));
+        }
     }
     audio_engine_decode(ctx->audio_engine, data->data, data->data_len,
                         (int)data->ct, pts_ns);
