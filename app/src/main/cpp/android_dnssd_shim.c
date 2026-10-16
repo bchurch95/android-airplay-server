@@ -74,13 +74,32 @@ void dnssd_error_text(int *error, const char *appname) {
     printf("dnssd (android NsdManager) failed with error code %d\n", *error);
 }
 
+static char g_device_model[64] = GLOBAL_MODEL;
+
+void android_dnssd_set_model(const char *model) {
+    if (model && strlen(model) > 0) {
+        strncpy(g_device_model, model, sizeof(g_device_model) - 1);
+        g_device_model[sizeof(g_device_model) - 1] = '\0';
+    }
+}
+
+const char *android_dnssd_get_model(void) {
+    return g_device_model;
+}
+
 int
 dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
 {
-    char features[22] = {0};
+    char features[32] = {0};
+    char pi_unique[64] = {0};
     dnssd_private_t *priv = _priv(dnssd);
 
     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
+    snprintf(pi_unique, sizeof(pi_unique), "%02x%02x%02x%02x-%02x%02x-4000-8000-%02x%02x%02x%02x%02x%02x",
+             (unsigned char)dnssd->hw_addr[0], (unsigned char)dnssd->hw_addr[1], (unsigned char)dnssd->hw_addr[2],
+             (unsigned char)dnssd->hw_addr[3], (unsigned char)dnssd->hw_addr[4], (unsigned char)dnssd->hw_addr[5],
+             (unsigned char)dnssd->hw_addr[0], (unsigned char)dnssd->hw_addr[1], (unsigned char)dnssd->hw_addr[2],
+             (unsigned char)dnssd->hw_addr[3], (unsigned char)dnssd->hw_addr[4], (unsigned char)dnssd->hw_addr[5]);
 
     txt_record_t *rec = &priv->raop_record;
     rec->count = 0;
@@ -91,9 +110,10 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "et", RAOP_ET);
     _txt_set(rec, "vv", RAOP_VV);
     _txt_set(rec, "ft", features);
-    _txt_set(rec, "am", GLOBAL_MODEL);
+    _txt_set(rec, "am", g_device_model);
     _txt_set(rec, "md", RAOP_MD);
     _txt_set(rec, "rhd", RAOP_RHD);
+    _txt_set(rec, "gid", pi_unique);
 
     switch (dnssd->pin_pw) {
     case 2:
@@ -116,7 +136,7 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "sv", RAOP_SV);
     _txt_set(rec, "tp", RAOP_TP);
     _txt_set(rec, "txtvers", RAOP_TXTVERS);
-    _txt_set(rec, "vs", RAOP_VS);
+    _txt_set(rec, "vs", GLOBAL_VERSION);
     _txt_set(rec, "vn", RAOP_VN);
     if (dnssd->pk) {
         _txt_set(rec, "pk", dnssd->pk);
@@ -136,10 +156,16 @@ int
 dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
 {
     char device_id[3 * MAX_HWADDR_LEN];
-    char features[22] = {0};
+    char features[32] = {0};
+    char pi_unique[64] = {0};
     dnssd_private_t *priv = _priv(dnssd);
 
     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
+    snprintf(pi_unique, sizeof(pi_unique), "%02x%02x%02x%02x-%02x%02x-4000-8000-%02x%02x%02x%02x%02x%02x",
+             (unsigned char)dnssd->hw_addr[0], (unsigned char)dnssd->hw_addr[1], (unsigned char)dnssd->hw_addr[2],
+             (unsigned char)dnssd->hw_addr[3], (unsigned char)dnssd->hw_addr[4], (unsigned char)dnssd->hw_addr[5],
+             (unsigned char)dnssd->hw_addr[0], (unsigned char)dnssd->hw_addr[1], (unsigned char)dnssd->hw_addr[2],
+             (unsigned char)dnssd->hw_addr[3], (unsigned char)dnssd->hw_addr[4], (unsigned char)dnssd->hw_addr[5]);
 
     if (utils_hwaddr_airplay(device_id, sizeof(device_id), dnssd->hw_addr, dnssd->hw_addr_len) < 0) {
         return -1;
@@ -148,6 +174,7 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
     txt_record_t *rec = &priv->airplay_record;
     rec->count = 0;
 
+    _txt_set(rec, "acl", "0");
     _txt_set(rec, "deviceid", device_id);
     _txt_set(rec, "features", features);
 
@@ -162,12 +189,16 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
         break;
     }
     _txt_set(rec, "flags", "0x4");
-    _txt_set(rec, "model", GLOBAL_MODEL);
+    _txt_set(rec, "gid", pi_unique);
+    _txt_set(rec, "igl", "0");
+    _txt_set(rec, "gcgl", "0");
+    _txt_set(rec, "model", g_device_model);
+    _txt_set(rec, "protovers", "1.1");
     if (dnssd->pk) {
         _txt_set(rec, "pk", dnssd->pk);
     }
-    _txt_set(rec, "pi", AIRPLAY_PI);
-    _txt_set(rec, "srcvers", AIRPLAY_SRCVERS);
+    _txt_set(rec, "pi", pi_unique);
+    _txt_set(rec, "srcvers", GLOBAL_VERSION);
     _txt_set(rec, "vv", AIRPLAY_VV);
     return 0;
 }

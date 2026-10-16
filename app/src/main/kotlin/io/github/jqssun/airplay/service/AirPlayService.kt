@@ -411,6 +411,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
+        val deviceModel = prefs.getString(Prefs.DEVICE_MODEL, Prefs.DEF_DEVICE_MODEL) ?: Prefs.DEF_DEVICE_MODEL
+        NativeBridge.nativeSetDeviceModel(deviceModel)
+
         val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT).coerceIn(1, 65535)
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {

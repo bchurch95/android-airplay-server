@@ -27,6 +27,12 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Apply Submodule Patches
+        run: |
+          if [ -f patches/uxplay_airplay2.patch ]; then
+            git -C app/src/main/cpp/third_party/UxPlay apply "$(pwd)/patches/uxplay_airplay2.patch"
+          fi
+
       - name: Set Version
         run: |
           if [ -n "${{ inputs.version }}" ]; then

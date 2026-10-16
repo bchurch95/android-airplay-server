@@ -44,4 +44,5 @@ object NativeBridge {
     external fun nativeServerAudioFormat(handle: Long, ct: Int, spf: Int)
     // fills direct buffer with packed debug snapshot; false if audio isn't running
     external fun nativeServerAudioDebug(handle: Long, buf: java.nio.ByteBuffer): Boolean
+    external fun nativeSetDeviceModel(model: String)
 }

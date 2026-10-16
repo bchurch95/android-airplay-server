@@ -148,8 +148,9 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
 
     /* Register dnssd records (stored in shim, Kotlin reads them) */
     if (ctx->dnssd) {
-        dnssd_set_airplay_features(ctx->dnssd, 27, 1); // SupportsBufferedAudio
-        dnssd_set_airplay_features(ctx->dnssd, 28, 1); // SupportsPTP
+        dnssd_set_airplay_features(ctx->dnssd, 38, 1); // Supports Unified Media Control
+        dnssd_set_airplay_features(ctx->dnssd, 40, 1); // Supports Buffered Audio
+        dnssd_set_airplay_features(ctx->dnssd, 41, 1); // Supports PTP
         dnssd_register_raop(ctx->dnssd, port);
         dnssd_register_airplay(ctx->dnssd, port);
     }
@@ -453,4 +454,16 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioDebug(
     jlong cap = env->GetDirectBufferCapacity(buf);
     if (!addr || cap <= 0) return JNI_FALSE;
     return audio_engine_get_debug(ctx->cb_ctx.audio_engine, addr, (size_t)cap) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDeviceModel(
+        JNIEnv *env, jobject thiz, jstring model) {
+    if (!model) return;
+    const char *model_c = env->GetStringUTFChars(model, nullptr);
+    if (model_c) {
+        android_dnssd_set_model(model_c);
+        env->ReleaseStringUTFChars(model, model_c);
+    }
 }

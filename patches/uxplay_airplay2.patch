@@ -1,0 +1,44 @@
+diff --git a/lib/global.h b/lib/global.h
+index 03f2dcb..4251d4f 100644
+--- a/lib/global.h
++++ b/lib/global.h
+@@ -18,8 +18,8 @@
+ #ifndef GLOBAL_H
+ #define GLOBAL_H
+ 
+-#define GLOBAL_MODEL    "AppleTV3,2"
+-#define GLOBAL_VERSION  "220.68"
++#define GLOBAL_MODEL    "AirPort10,115"
++#define GLOBAL_VERSION  "366.0"
+ 
+ /* use old protocol for audio AES key if client's User-Agent string is contained in these strings */
+ /* replace xxx by any new User-Agent string as needed */
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index 9420600..79915d5 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -139,9 +139,23 @@ raop_handler_info(raop_conn_t *conn,
+     plist_t name_node = plist_new_string(name);
+     plist_dict_set_item(res_node, "name", name_node);
+ 
+-    plist_t pi_node = plist_new_string(AIRPLAY_PI);
++    char pi_unique[64] = {0};
++    if (hw_addr_raw && hw_addr_raw_len >= 6) {
++        snprintf(pi_unique, sizeof(pi_unique), "%02x%02x%02x%02x-%02x%02x-4000-8000-%02x%02x%02x%02x%02x%02x",
++                 (unsigned char)hw_addr_raw[0], (unsigned char)hw_addr_raw[1], (unsigned char)hw_addr_raw[2],
++                 (unsigned char)hw_addr_raw[3], (unsigned char)hw_addr_raw[4], (unsigned char)hw_addr_raw[5],
++                 (unsigned char)hw_addr_raw[0], (unsigned char)hw_addr_raw[1], (unsigned char)hw_addr_raw[2],
++                 (unsigned char)hw_addr_raw[3], (unsigned char)hw_addr_raw[4], (unsigned char)hw_addr_raw[5]);
++    } else {
++        strncpy(pi_unique, AIRPLAY_PI, sizeof(pi_unique) - 1);
++    }
++
++    plist_t pi_node = plist_new_string(pi_unique);
+     plist_dict_set_item(res_node, "pi", pi_node);
+ 
++    plist_t gid_node = plist_new_string(pi_unique);
++    plist_dict_set_item(res_node, "gid", gid_node);
++
+     plist_t vv_node = plist_new_uint(strtol(AIRPLAY_VV, NULL, 10));
+     plist_dict_set_item(res_node, "vv", vv_node);
+ 
