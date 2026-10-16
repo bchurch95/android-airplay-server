@@ -934,7 +934,7 @@ index 61aaa71..17180bc 100644
  uint64_t raop_ntp_get_video_arrival_offset(raop_ntp_t* raop_ntp);
  
 diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
-index 35d42df..343431b 100644
+index 35d42df..e9c69c6 100644
 --- a/lib/raop_rtp.c
 +++ b/lib/raop_rtp.c
 @@ -21,6 +21,8 @@
@@ -1041,7 +1041,7 @@ index 35d42df..343431b 100644
              } else {
              // Render continuous buffer entries
                  void *payload = NULL;
-@@ -690,6 +735,487 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
+@@ -690,6 +735,507 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
      MUTEX_UNLOCK(raop_rtp->run_mutex);
  }
  
@@ -1232,8 +1232,8 @@ index 35d42df..343431b 100644
 +            continue;
 +        }
 +
-+        /* 23-bit sequence number */
-+        uint32_t seqnum = (((uint32_t)(packet[1] & 0x7f) << 16) |
++        /* 24-bit sequence number */
++        uint32_t seqnum = (((uint32_t)packet[1] << 16) |
 +                           ((uint32_t)packet[2] << 8) |
 +                           (uint32_t)packet[3]);
 +        uint32_t rtp_timestamp = byteutils_get_int_be(packet, 4);
@@ -1242,31 +1242,37 @@ index 35d42df..343431b 100644
 +        MUTEX_LOCK(raop_rtp->run_mutex);
 +        f_from = raop_rtp->flush_from_seq;
 +        f_until = raop_rtp->flush_until_seq;
++        uint32_t f_ts = raop_rtp->flush_until_ts;
 +        flush_pend = raop_rtp->buffered_flush_pending;
-+        if (f_until >= 0) {
-+            if (f_from <= 0 || seqnum >= (uint32_t)f_from) {
-+                if (seqnum < (uint32_t)f_until) {
-+                    if (flush_pend) {
-+                        raop_rtp->buffered_flush_pending = false;
-+                        MUTEX_UNLOCK(raop_rtp->run_mutex);
-+                        if (raop_rtp->callbacks.audio_flush) {
-+                            raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
-+                        }
-+                                            } else {
-+                        MUTEX_UNLOCK(raop_rtp->run_mutex);
-+                    }
-+                    continue; /* Drop flushed packet at wire speed */
-+                } else {
-+                    /* Reached flushUntilSeq: clear flush state */
-+                    raop_rtp->flush_from_seq = -1;
-+                    raop_rtp->flush_until_seq = -1;
++        if (f_until >= 0 || f_ts > 0) {
++            bool passed_until = false;
++            if (f_ts > 0 && rtp_timestamp >= f_ts) {
++                passed_until = true;
++            } else if (f_until >= 0 && (f_from <= 0 || seqnum >= (uint32_t)f_from) && seqnum >= (uint32_t)f_until) {
++                passed_until = true;
++            }
++            if (!passed_until && (f_from <= 0 || seqnum >= (uint32_t)f_from)) {
++                if (flush_pend) {
 +                    raop_rtp->buffered_flush_pending = false;
 +                    MUTEX_UNLOCK(raop_rtp->run_mutex);
-+                    if (flush_pend && raop_rtp->callbacks.audio_flush) {
++                    if (raop_rtp->callbacks.audio_flush) {
 +                        raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
 +                    }
-+                                        logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: flush completed at seqnum=%u rtp=%u", seqnum, rtp_timestamp);
++                } else {
++                    MUTEX_UNLOCK(raop_rtp->run_mutex);
 +                }
++                continue; /* Drop flushed packet at wire speed */
++            } else if (passed_until) {
++                /* Reached flushUntilSeq/flushUntilTS: clear flush state */
++                raop_rtp->flush_from_seq = -1;
++                raop_rtp->flush_until_seq = -1;
++                raop_rtp->flush_until_ts = 0;
++                raop_rtp->buffered_flush_pending = false;
++                MUTEX_UNLOCK(raop_rtp->run_mutex);
++                if (flush_pend && raop_rtp->callbacks.audio_flush) {
++                    raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
++                }
++                logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: flush completed at seqnum=%u rtp=%u", seqnum, rtp_timestamp);
 +            } else {
 +                MUTEX_UNLOCK(raop_rtp->run_mutex);
 +            }
@@ -1306,13 +1312,23 @@ index 35d42df..343431b 100644
 +        for (;;) {
 +            if (raop_rtp_process_events(raop_rtp, NULL)) goto loop_end;
 +            MUTEX_LOCK(raop_rtp->run_mutex);
++            if (!raop_rtp->running) {
++                MUTEX_UNLOCK(raop_rtp->run_mutex);
++                goto loop_end;
++            }
++            if (raop_rtp->buffered_rate == 0) {
++                MUTEX_UNLOCK(raop_rtp->run_mutex);
++                goto next_packet;
++            }
 +            bool a_valid = raop_rtp->anchor_valid;
 +            bool a_ever = raop_rtp->has_anchored;
 +            uint64_t a_local = raop_rtp->anchor_local_ns;
 +            uint32_t a_rtp = raop_rtp->anchor_rtp;
-+            bool in_flush = raop_rtp->flush_until_seq >= 0 &&
-+                            (raop_rtp->flush_from_seq <= 0 || seqnum >= (uint32_t)raop_rtp->flush_from_seq) &&
-+                            seqnum < (uint32_t)raop_rtp->flush_until_seq;
++            int64_t f_until = raop_rtp->flush_until_seq;
++            int64_t f_from = raop_rtp->flush_from_seq;
++            uint32_t f_ts = raop_rtp->flush_until_ts;
++            bool in_flush = (f_until >= 0 && (f_from <= 0 || seqnum >= (uint32_t)f_from) && seqnum < (uint32_t)f_until) ||
++                            (f_ts > 0 && rtp_timestamp < f_ts);
 +            MUTEX_UNLOCK(raop_rtp->run_mutex);
 +            if (in_flush) goto next_packet;
 +            uint64_t now_ns = raop_mono_ns();
@@ -1459,6 +1475,10 @@ index 35d42df..343431b 100644
 +    }
 +    raop_rtp->buffered_rate = rate;
 +    if (rate != 0) {
++        raop_rtp->flush_from_seq = -1;
++        raop_rtp->flush_until_seq = -1;
++        raop_rtp->flush_until_ts = 0;
++        raop_rtp->buffered_flush_pending = false;
 +        uint64_t local_mono_ns = raop_mono_ns();
 +        uint64_t calc_anchor = local_mono_ns;
 +        if (net_secs > 0) {
@@ -1529,7 +1549,7 @@ index 35d42df..343431b 100644
  void
  raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume)
  {
-@@ -822,6 +1348,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
+@@ -822,6 +1368,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
          CLOSESOCKET(raop_rtp->dsock);
          raop_rtp->dsock = -1;
      }
