@@ -27,17 +27,12 @@ public:
 
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream, void *audioData,
                                           int32_t numFrames) override {
+        int bufFrames = stream->getBufferSizeInFrames();
+        int sampleRate = stream->getSampleRate();
         int64_t hwLatencyNs = 0;
-        auto latResult = stream->calculateLatencyMillis();
-        if (latResult) {
-            hwLatencyNs = (int64_t)(latResult.value() * 1000000.0);
-        } else {
-            int bufFrames = stream->getBufferSizeInFrames();
-            int sampleRate = stream->getSampleRate();
-            if (sampleRate > 0) {
-                // Buffer queued frames + 25ms AudioFlinger/DSP DAC path
-                hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate + 25000000LL;
-            }
+        if (sampleRate > 0) {
+            // Meta Portal hardware latency: queued buffer frames + 27ms Qualcomm Hexagon DSP / AudioFlinger mixer DAC path
+            hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate + 27000000LL;
         }
         static int s_cbCount = 0;
         if ((s_cbCount++ % 200) == 1 && mLog) {
