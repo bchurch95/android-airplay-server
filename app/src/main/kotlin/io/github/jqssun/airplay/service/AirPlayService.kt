@@ -332,7 +332,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START_SERVER) {
             promoteToForeground()
-            val name = prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME
+            val name = Prefs.getServerName(this, prefs)
             startServer(name, ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }
@@ -345,7 +345,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun startServer(name: String, ensureServiceStarted: Boolean) {
         if (_serverState.value == ServerState.RUNNING) return
-        val effectiveName = name.ifBlank { Prefs.DEF_SERVER_NAME }
+        val effectiveName = name.ifBlank { Prefs.getDefaultServerName(this) }
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }

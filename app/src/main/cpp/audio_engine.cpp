@@ -88,6 +88,13 @@ struct AudioEngine {
         }
     }
 
+    void flush() {
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        if (mTimeline) {
+            mTimeline->requestFlush();
+        }
+    }
+
     // touches decoder: must not run concurrently with decode()
     void stop() {
         if (mOutput) mOutput->stop();
@@ -163,7 +170,8 @@ private:
     void initInternals(const AudioConfig &cfg) {
         mDecLatency.setEnableLogging(cfg.benchmarkLog);
         mTimeline = std::make_shared<TimelineBuffer>(mSampleRate, mChannels,
-                                                     cfg.staticCushionMs, cfg.percentilePct);
+                                                     cfg.staticCushionMs, cfg.percentilePct,
+                                                     cfg.lowLatency);
         mOutput = AudioOutput::create(mSampleRate, mChannels, cfg.oboeBufferFrames,
                                       cfg.lowLatency, mTimeline, mLog);
         mApplied = std::make_unique<AudioConfig>(cfg);
@@ -240,6 +248,10 @@ bool audio_engine_start(AudioEngine *engine) {
 
 void audio_engine_pause(AudioEngine *engine) {
     if (engine) engine->pause();
+}
+
+void audio_engine_flush(AudioEngine *engine) {
+    if (engine) engine->flush();
 }
 
 bool audio_engine_get_debug(AudioEngine *engine, void *dst, size_t dstLen) {

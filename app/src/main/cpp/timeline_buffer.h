@@ -77,10 +77,10 @@ class DelayTracker {
 public:
     // staticCushionMs > 0: fixed cushion, tuner disabled
     // staticCushionMs <= 0: tune between MIN_CUSHION_MS and MAX_CUSHION_MS
-    DelayTracker(int sampleRate, int channels, int staticCushionMs, int percentilePct)
+    DelayTracker(int sampleRate, int channels, int staticCushionMs, int percentilePct, bool lowLatency = false)
         : mSampleRate(sampleRate), mChannels(channels),
           mAdaptive(staticCushionMs <= 0),
-          mFloor(msToSamples(sampleRate, channels, mAdaptive ? MIN_CUSHION_MS : staticCushionMs)),
+          mFloor(msToSamples(sampleRate, channels, mAdaptive ? (lowLatency ? MIN_CUSHION_LOW_LATENCY_MS : MIN_CUSHION_MUSIC_MS) : staticCushionMs)),
           mCeil(msToSamples(sampleRate, channels, mAdaptive ? MAX_CUSHION_MS : staticCushionMs)),
           mPercentilePct(percentilePct),
           mTuned(mFloor) {}
@@ -144,8 +144,9 @@ private:
         return (size_t)sampleRate * ms / 1000 * channels;
     }
 
-    static constexpr int MIN_CUSHION_MS = 0;             // algorithm already enforces effective floor
-    static constexpr int MAX_CUSHION_MS = 4000;          // Support AirPlay 2 2-3s forward multi-room buffer
+    static constexpr int MIN_CUSHION_LOW_LATENCY_MS = 100; // ~2.5 Portal bursts
+    static constexpr int MIN_CUSHION_MUSIC_MS = 250;       // standard AirPlay audio latency buffer
+    static constexpr int MAX_CUSHION_MS = 400;           // Max adaptive jitter cushion (400ms)
     static constexpr int BUCKET_MS = 10;                 // histogram granularity
     static constexpr int NBUCKETS = MAX_CUSHION_MS / BUCKET_MS;
     static constexpr int64_t BUCKET_NS = (int64_t)BUCKET_MS * 1000000LL;
@@ -206,14 +207,15 @@ private:
 class TimelineBuffer {
 public:
     // cushion policy lives in mTracker; timeline reads mTracker.target() live
-    TimelineBuffer(int sampleRate, int channels, int staticCushionMs, int percentilePct)
+    TimelineBuffer(int sampleRate, int channels, int staticCushionMs, int percentilePct, bool lowLatency = false)
         : mSampleRate(sampleRate),
           mChannels(channels),
-          mTracker(sampleRate, channels, staticCushionMs, percentilePct),
+          mLowLatency(lowLatency),
+          mTracker(sampleRate, channels, staticCushionMs, percentilePct, lowLatency),
           // ring can't be reallocated mid-stream: size for worst-case backlog, i.e. cap
           // of largest reachable cushion + one throttle window of overshoot (trims are
           // throttled), 2x slack
-          mRing(2 * capOf(mTracker.ceil()) + (size_t)sampleRate * TRIM_THROTTLE_MS / 1000 * channels) {}
+          mRing(std::max<size_t>((size_t)sampleRate * 8 * channels, 2 * capOf(mTracker.ceil()) + (size_t)sampleRate * TRIM_THROTTLE_MS / 1000 * channels)) {}
 
     void noteOutputBufferFrames(int frames) { mTracker.noteOutputBufferFrames(frames); }
 
@@ -227,6 +229,11 @@ public:
         }
         const int64_t durNs = samples * NS_PER_SEC / mChannels / mSampleRate;
 
+        // If ring was empty or head pts was cleared, track presentation time at head
+        if (mRing.available() == 0 || mHeadPtsNs.load(std::memory_order_relaxed) == 0) {
+            mHeadPtsNs.store(ptsNs, std::memory_order_release);
+        }
+
         // consumer underran since last write: it already played the gap as real-time
         // silence, re-anchor so we don't also insert it here
         if (mUnderran.exchange(false, std::memory_order_relaxed)) {
@@ -236,7 +243,10 @@ public:
 
         // large gap: possible discontinuity or clock shift. reanchor() must precede
         // observe() so the reset applies to this observation
-        if (gapNs > MAX_GAP_NS || gapNs < -MAX_GAP_NS) mTracker.reanchor();
+        if (gapNs > MAX_GAP_NS || gapNs < -MAX_GAP_NS) {
+            mTracker.reanchor();
+            mHeadPtsNs.store(ptsNs, std::memory_order_release);
+        }
 
         // no-op in static-cushion mode
         mTracker.observe(ptsNs, monoNs(), durNs);
@@ -258,17 +268,44 @@ public:
         mExpectedPtsNs = ptsNs + durNs;
     }
 
+    // thread-safe flush request from producer/control thread; executed on consumer thread
+    void requestFlush() {
+        mFlushRequested.store(true, std::memory_order_release);
+    }
+
     // consumer: pop frames*channels samples into out, silence-padded on underrun
     void read(int16_t *out, int32_t frames) {
+        if (mFlushRequested.exchange(false, std::memory_order_acquire)) {
+            mRing.skip(mRing.available());
+            mHeadPtsNs.store(0, std::memory_order_release);
+            mPriming = true;
+            mPrimeSilenceFrames = 0;
+            mAboveCapSinceNs = 0;
+            mUnderran.store(true, std::memory_order_relaxed);
+        }
         const size_t need = (size_t)frames * mChannels;
         const size_t tuned = mTracker.target();
         const int64_t now = monoNs();
 
-        // bound latency: cap tracks tuned cushion live so a calmed link sheds latency
-        // without an underrun. each trim costs a glitch, so be conservative: trim only
-        // after backlog stayed above cap for TRIM_SUSTAIN (skip transient spikes), at
-        // most once per TRIM_THROTTLE, and not within that window of an underrun
-        // (trimming while rebuilding cushion is counterproductive)
+        int64_t headPts = mHeadPtsNs.load(std::memory_order_acquire);
+        if (headPts > 0) {
+            int64_t leadNs = headPts - now;
+            if (leadNs > 10000000LL) {
+                // Scheduled in future (>10ms ahead): output silence while buffering
+                memset(out, 0, need * sizeof(int16_t));
+                return;
+            } else if (leadNs < -60000000LL) {
+                // Audio fell behind (>60ms late): skip late frames to catch up
+                size_t lateFrames = (size_t)((-leadNs) * mSampleRate / NS_PER_SEC);
+                size_t lateSamples = std::min(lateFrames * (size_t)mChannels, mRing.available());
+                if (lateSamples > 0) {
+                    mRing.skip(lateSamples);
+                    headPts += (int64_t)(lateSamples / mChannels) * NS_PER_SEC / mSampleRate;
+                    mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+                }
+            }
+        }
+
         const size_t avail = mRing.available();
         if (avail > capOf(tuned)) {
             if (mAboveCapSinceNs == 0) mAboveCapSinceNs = now;
@@ -277,26 +314,24 @@ public:
         }
         if (mAboveCapSinceNs != 0 && now - mAboveCapSinceNs >= TRIM_SUSTAIN_NS
                 && now - mLastTrimBlockNs >= TRIM_THROTTLE_NS) {
-            mRing.skip(avail - tuned);
+            size_t trimmed = avail - tuned;
+            mRing.skip(trimmed);
+            if (headPts > 0) {
+                headPts += (int64_t)(trimmed / mChannels) * NS_PER_SEC / mSampleRate;
+                mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+            }
             mMetrics.countTrim();
             mLastTrimBlockNs = now;
             mAboveCapSinceNs = 0;
         }
 
-        // prebuffer: hold output until cushion fills, builds jitter headroom
-        if (mPriming) {
+        // prebuffer: hold output until cushion fills (for unscheduled audio where headPts == 0)
+        if (mPriming && headPts == 0) {
             const size_t buffered = mRing.available();
-            // time the wait only while holding partial data; reset on empty ring so the
-            // producer gets the full window once a sound starts, otherwise we could time
-            // out on pre-sound silence and underrun the instant the first frame lands
             if (buffered == 0) mPrimeSilenceFrames = 0;
             else mPrimeSilenceFrames += (uint32_t)frames;
-            // short sound can end before filling cushion; after holding partial data
-            // through 2x cushion of silence the sound is complete: play it
             const uint32_t starveFrames = (uint32_t)(2 * tuned / mChannels);
             const bool starved = buffered > 0 && mPrimeSilenceFrames >= starveFrames;
-            // also keep priming on empty ring: with 0 cushion `buffered < tuned` is
-            // never true, so we'd otherwise underrun on every empty read between sounds
             if (buffered == 0 || (buffered < tuned && !starved)) {
                 memset(out, 0, need * sizeof(int16_t));
                 return;
@@ -311,7 +346,11 @@ public:
             mPriming = true;
             mLastTrimBlockNs = now;  // hold off trims while rebuilding
             mUnderran.store(true, std::memory_order_relaxed);  // producer re-anchors
+            mHeadPtsNs.store(0, std::memory_order_release);
             mMetrics.countUnderrun();
+        } else if (headPts > 0) {
+            headPts += (int64_t)frames * NS_PER_SEC / mSampleRate;
+            mHeadPtsNs.store(headPts, std::memory_order_relaxed);
         }
     }
 
@@ -327,6 +366,7 @@ public:
     // tail; only while output callback is stopped (skip() is consumer-side)
     void flushAndReprime() {
         mRing.skip(mRing.available());
+        mHeadPtsNs.store(0, std::memory_order_release);
         mPriming = true;
     }
 
@@ -349,6 +389,10 @@ private:
     // latency ceiling for cushion: 2x, but never below TRIM_FLOOR_MS so tiny cushion
     // still gets slack before a trim (trim costs a glitch)
     size_t capOf(size_t cushionSamples) const {
+        if (!mLowLatency || mExpectedPtsNs == 0) {
+            // In music streaming, sender buffers 1-2s ahead; never trim valid buffered audio under 3500ms
+            return (size_t)mSampleRate * 3500 / 1000 * mChannels;
+        }
         return std::max(cushionSamples * 2, (size_t)mSampleRate * TRIM_FLOOR_MS / 1000 * mChannels);
     }
 
@@ -364,7 +408,7 @@ private:
 
     static constexpr int64_t SLACK_NS = 10'000'000LL;    // ignore <10ms gaps (NTP shift, rounding)
     static constexpr int64_t MAX_GAP_NS = 750'000'000LL; // >750ms = discontinuity, re-anchor
-    static constexpr int TRIM_FLOOR_MS = 30;             // min trim point even for tiny cushion
+    static constexpr int TRIM_FLOOR_MS = 160;             // min trim point even for tiny cushion
     static constexpr int TRIM_THROTTLE_MS = 2000;        // min spacing between trims, and after underrun
     static constexpr int64_t TRIM_THROTTLE_NS = (int64_t)TRIM_THROTTLE_MS * 1'000'000LL;
     static constexpr int TRIM_SUSTAIN_MS = 2000;         // backlog must exceed cap this long before trim
@@ -372,6 +416,7 @@ private:
 
     const int mSampleRate;
     const int mChannels;
+    const bool mLowLatency;
     DelayTracker mTracker;               // owns cushion policy; read live each read()
     SpscRing mRing;
     TimelineMetrics mMetrics;
@@ -380,6 +425,8 @@ private:
     int64_t mLastTrimBlockNs = 0;        // consumer-only: last trim/underrun time (trim throttle)
     int64_t mAboveCapSinceNs = 0;        // consumer-only: when backlog first exceeded cap (0 = under)
     std::atomic<bool> mUnderran{false};  // consumer->producer: underrun happened
+    std::atomic<bool> mFlushRequested{false}; // producer->consumer: flush requested
+    std::atomic<int64_t> mHeadPtsNs{0};        // presentation time at head of ring buffer
 
     int64_t mExpectedPtsNs = 0;          // presentation time expected at write head
 };

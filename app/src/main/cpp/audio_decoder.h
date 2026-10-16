@@ -185,9 +185,11 @@ public:
         if (!in) return false;
         const size_t n = len < cap ? len : cap;
         memcpy(in, data, n);
-        mProbe.record((int64_t)(ptsNs / 1000), monoNs());
+        mHasPts.store(ptsNs != 0, std::memory_order_relaxed);
+        const uint64_t inPtsUs = (ptsNs != 0) ? (uint64_t)(ptsNs / 1000) : (mSyntheticPtsUs += 23220);
+        mProbe.record((int64_t)inPtsUs, monoNs());
         // still queue packets that are too large, but truncate them and report as error
-        return AMediaCodec_queueInputBuffer(mCodec, (size_t)ii, 0, n, (uint64_t)(ptsNs / 1000), 0) ==
+        return AMediaCodec_queueInputBuffer(mCodec, (size_t)ii, 0, n, inPtsUs, 0) ==
                    AMEDIA_OK && n == len;
     }
 
@@ -202,9 +204,12 @@ private:
             size_t osz = 0;
             uint8_t *out = AMediaCodec_getOutputBuffer(mCodec, (size_t)oi, &osz);
             if (out && info.size > 0) {
+                const int64_t outPtsNs = mHasPts.load(std::memory_order_relaxed)
+                                             ? ((int64_t)info.presentationTimeUs * 1000)
+                                             : 0;
                 mTimeline.write((const int16_t *)(out + info.offset),
                                 (size_t)info.size / sizeof(int16_t),  // bytes -> samples
-                                (int64_t)info.presentationTimeUs * 1000);
+                                outPtsNs);
             }
             const int64_t nowNs = monoNs();
             AMediaCodec_releaseOutputBuffer(mCodec, (size_t)oi, false);
@@ -220,6 +225,8 @@ private:
     LatencyProbe mProbe;
     std::thread mDrainThread;
     std::atomic<bool> mDrainRun{false};   // drain thread stop signal
+    std::atomic<bool> mHasPts{false};
+    uint64_t mSyntheticPtsUs = 0;
 };
 
 // route ffmpeg warnings/errors to logcat
@@ -288,7 +295,7 @@ public:
                 mLog.error("ffmpeg ALAC: unsupported sample format %d", mFrame->format);
                 return false;
             }
-            pts += (int64_t)n * NS_PER_SEC / mCtx->sample_rate;
+            if (pts != 0) pts += (int64_t)n * NS_PER_SEC / mCtx->sample_rate;
         }
 
         mLat.record(monoNs() - t0);

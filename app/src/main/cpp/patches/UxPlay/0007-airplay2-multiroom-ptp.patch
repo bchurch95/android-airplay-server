@@ -104,7 +104,7 @@ index 7123c96..857c587 100644
      http_response_add_header(response, "Content-Type", "text/x-apple-plist+xml");
      free(hw_addr);
 diff --git a/lib/http_request.c b/lib/http_request.c
-index ec030c4..50b7a19 100644
+index ec030c4..ff6a503 100644
 --- a/lib/http_request.c
 +++ b/lib/http_request.c
 @@ -29,6 +29,7 @@ struct http_request_s {
@@ -125,7 +125,7 @@ index ec030c4..50b7a19 100644
          free(request->url);
          for (int i = 0; i < request->headers_size; i++) {
              free(request->headers[i]);
-@@ -182,7 +186,42 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
+@@ -182,7 +186,58 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
  {
      assert(request);
  
@@ -158,6 +158,22 @@ index ec030c4..50b7a19 100644
 +                memcpy(allocated, "POST    ", 8);
 +                parse_data = allocated;
 +            }
++        } else if (!strncmp(data, "FLUSHBUFFERED ", 14)) {
++            request->custom_method = strdup("FLUSHBUFFERED");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST          ", 14);
++                parse_data = allocated;
++            }
++        } else if (!strncmp(data, "SETPEERSX ", 10)) {
++            request->custom_method = strdup("SETPEERSX");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST      ", 10);
++                parse_data = allocated;
++            }
 +        }
 +    }
 +
@@ -169,7 +185,7 @@ index ec030c4..50b7a19 100644
  
      /* support for "Upgrade" to reverse http ("PTTH/1.0") protocol */
      llhttp_resume_after_upgrade(&request->parser);
-@@ -234,6 +273,9 @@ http_request_get_method(http_request_t *request)
+@@ -234,6 +289,9 @@ http_request_get_method(http_request_t *request)
      if (request->is_reverse) {
          return NULL;
      }
@@ -180,10 +196,30 @@ index ec030c4..50b7a19 100644
  }
  
 diff --git a/lib/raop.c b/lib/raop.c
-index c86393f..86a21c6 100644
+index c86393f..9f1207d 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
-@@ -261,14 +261,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -122,6 +122,11 @@ struct raop_conn_s {
+     char *client_session_id;
+     bool authenticated;
+     bool have_active_remote;
++
++    unsigned char aeskey[16];
++    unsigned char aesiv[16];
++    bool have_keys;
++    int event_sock;
+ };
+ typedef struct raop_conn_s raop_conn_t;
+ 
+@@ -140,6 +145,7 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
+         return NULL;
+     }
+     conn->raop = raop;
++    conn->event_sock = -1;
+     conn->raop_rtp = NULL;
+     conn->raop_rtp_mirror = NULL;
+     conn->raop_ntp = NULL;
+@@ -261,14 +267,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
      }
  
   /* this rejects messages from _airplay._tcp for video streaming protocol unless bool raop->hls_support is true*/   
@@ -201,7 +237,7 @@ index c86393f..86a21c6 100644
  
      if (conn->connection_type == CONNECTION_TYPE_UNKNOWN) {
          if (cseq || ble) {
-@@ -322,12 +323,14 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -322,12 +329,14 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                      raop_ntp_stop(raop_ntp);
                  }
              }
@@ -218,7 +254,7 @@ index c86393f..86a21c6 100644
          }	  
      }
  
-@@ -404,7 +407,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -404,9 +413,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
  
      logger_log(raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
      raop_handler_t handler = NULL;
@@ -227,9 +263,12 @@ index c86393f..86a21c6 100644
 +        handler = &http_handler_hls;
 +    } else {
          if (!strcmp(method, "POST")) {
-             if (!strcmp(url, "/feedback")) {
+-            if (!strcmp(url, "/feedback")) {
++            if (!strcmp(url, "/feedback") || !strcmp(url, "/command")) {
                  handler = &raop_handler_feedback;
-@@ -418,34 +423,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+             } else if (!strcmp(url, "/pair-pin-start")) {
+                 handler = &raop_handler_pairpinstart;
+@@ -418,34 +429,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &raop_handler_pairverify;
              } else if (!strcmp(url, "/fp-setup")) {
                  handler = &raop_handler_fpsetup;
@@ -267,7 +306,7 @@ index c86393f..86a21c6 100644
                  handler = &http_handler_reverse;
              } else if (!strcmp(url, "/play")) {
                  handler = &http_handler_play;
-@@ -459,8 +441,6 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -459,8 +447,6 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_stop;
              } else if (!strcmp(url, "/action")) {
                  handler = &http_handler_action;
@@ -276,7 +315,7 @@ index c86393f..86a21c6 100644
              }
          } else if (!strcmp(method, "GET")) {
              if (!strcmp(url, "/server-info")) {
-@@ -468,14 +448,35 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -468,14 +454,39 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_server_info;
              } else if (!strcmp(url, "/playback-info")) {
                  handler = &http_handler_playback_info;
@@ -285,6 +324,8 @@ index c86393f..86a21c6 100644
              }
 +        } else if (!strcmp(method, "OPTIONS")) {
 +            handler = &raop_handler_options;
++        } else if (!strcmp(method, "ANNOUNCE")) {
++            handler = &raop_handler_announce;
 +        } else if (!strcmp(method, "SETUP")) {
 +            raop->hls_pending = false;
 +            handler = &raop_handler_setup;
@@ -294,12 +335,14 @@ index c86393f..86a21c6 100644
 +            handler = &raop_handler_set_parameter;
 +        } else if (!strcmp(method, "RECORD")) {
 +            handler = &raop_handler_record;
-+        } else if (!strcmp(method, "SETPEERS")) {
++        } else if (!strcmp(method, "SETPEERS") || !strcmp(method, "SETPEERSX")) {
 +            handler = &raop_handler_setpeers;
 +        } else if (!strcmp(method, "SETRATEANCHORTIME") || !strcmp(method, "SETRATE")) {
 +            handler = &raop_handler_setrateanchortime;
 +        } else if (!strcmp(method, "FLUSH")) {
 +            handler = &raop_handler_flush;
++        } else if (!strcmp(method, "FLUSHBUFFERED")) {
++            handler = &raop_handler_flushbuffered;
 +        } else if (!strcmp(method, "TEARDOWN")) {
 +            handler = &raop_handler_teardown;
          } else if (!strcmp(method, "PUT")) {
@@ -314,11 +357,27 @@ index c86393f..86a21c6 100644
      }
  
      if (handler != NULL) {
+@@ -574,6 +585,10 @@ conn_destroy(void *ptr) {
+     if (conn->raop_ntp) {
+         raop_ntp_destroy(conn->raop_ntp);
+     }
++    if (conn->event_sock != -1) {
++        CLOSESOCKET(conn->event_sock);
++        conn->event_sock = -1;
++    }
+ 
+     if (raop->callbacks.video_flush) {
+         raop->callbacks.video_flush(raop->callbacks.cls);
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..ad95cf7 100644
+index b779ece..4f3bc17 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
-@@ -106,7 +106,7 @@ raop_handler_info(raop_conn_t *conn,
+@@ -1,3 +1,4 @@
++#include <openssl/evp.h>
+ /**
+  *  Copyright (C) 2018  Juho Vähä-Herttua
+  *
+@@ -106,7 +107,7 @@ raop_handler_info(raop_conn_t *conn,
      }
    
      /* don't need anything below here in the response to initial  "txtAirPlay" GET/info request */
@@ -327,7 +386,7 @@ index b779ece..ad95cf7 100644
          goto finished;
      }
   
-@@ -139,9 +139,23 @@ raop_handler_info(raop_conn_t *conn,
+@@ -139,9 +140,23 @@ raop_handler_info(raop_conn_t *conn,
      plist_t name_node = plist_new_string(name);
      plist_dict_set_item(res_node, "name", name_node);
  
@@ -352,7 +411,7 @@ index b779ece..ad95cf7 100644
      plist_t vv_node = plist_new_uint(strtol(AIRPLAY_VV, NULL, 10));
      plist_dict_set_item(res_node, "vv", vv_node);
  
-@@ -157,11 +171,14 @@ raop_handler_info(raop_conn_t *conn,
+@@ -157,11 +172,14 @@ raop_handler_info(raop_conn_t *conn,
      plist_t keep_alive_send_stats_as_body_node = plist_new_bool(1);
      plist_dict_set_item(res_node, "keepAliveSendStatsAsBody", keep_alive_send_stats_as_body_node);
  
@@ -369,16 +428,146 @@ index b779ece..ad95cf7 100644
          goto finished;
      }
  
-@@ -582,7 +599,7 @@ raop_handler_options(raop_conn_t *conn,
+@@ -577,12 +595,74 @@ raop_handler_fpsetup(raop_conn_t *conn,
+     }
+ }
+ 
++
++static int
++raop_b64_decode(const char *in, unsigned char *out, int max_out) {
++    if (!in) return 0;
++    while (*in == ' ' || *in == '\t') in++;
++    int in_len = 0;
++    while (in[in_len] && in[in_len] != '\r' && in[in_len] != '\n' && in[in_len] != ' ') {
++        in_len++;
++    }
++    if (in_len == 0) return 0;
++    int ret = EVP_DecodeBlock(out, (const unsigned char *)in, in_len);
++    if (ret > 0 && in_len > 0 && in[in_len - 1] == '=') {
++        ret--;
++        if (in_len > 1 && in[in_len - 2] == '=') ret--;
++    }
++    return ret;
++}
++
++static void
++raop_handler_announce(raop_conn_t *conn,
++                      http_request_t *request, http_response_t *response,
++                      char **response_data, int *response_datalen)
++{
++    raop_t *raop = conn->raop;
++    int data_len = 0;
++    const char *data = http_request_get_data(request, &data_len);
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_announce received (len=%d)", data_len);
++
++    if (data && data_len > 0) {
++        const char *fpaeskey_str = strstr(data, "a=fpaeskey:");
++        const char *aesiv_str = strstr(data, "a=aesiv:");
++
++        if (fpaeskey_str && aesiv_str) {
++            unsigned char eaeskey[128] = {0};
++            int eaeskey_len = raop_b64_decode(fpaeskey_str + 11, eaeskey, sizeof(eaeskey));
++            int aesiv_len = raop_b64_decode(aesiv_str + 8, conn->aesiv, sizeof(conn->aesiv));
++
++            logger_log(raop->logger, LOGGER_INFO, "ANNOUNCE eaeskey_len=%d, aesiv_len=%d", eaeskey_len, aesiv_len);
++            if (eaeskey_len >= 72) {
++                int ret = fairplay_decrypt(conn->fairplay, eaeskey, conn->aeskey);
++                logger_log(raop->logger, LOGGER_INFO, "fairplay_decrypt ANNOUNCE ret=%d", ret);
++
++                unsigned char ecdh_secret[X25519_KEY_SIZE];
++                if (pairing_get_ecdh_secret_key(conn->session, ecdh_secret)) {
++                    unsigned char eaeskey_h[16];
++                    memcpy(eaeskey_h, conn->aeskey, 16);
++                    sha_ctx_t *ctx = sha_init();
++                    sha_update(ctx, eaeskey_h, 16);
++                    sha_update(ctx, ecdh_secret, 32);
++                    sha_final(ctx, eaeskey_h, NULL);
++                    sha_destroy(ctx);
++                    memcpy(conn->aeskey, eaeskey_h, 16);
++                    logger_log(raop->logger, LOGGER_INFO, "ANNOUNCE aeskey hashed with ecdh_secret");
++                }
++                conn->have_keys = true;
++            }
++        }
++    }
++
++    http_response_add_header(response, "Audio-Jack-Status", "connected; type=digital");
++}
++
+ static void
+ raop_handler_options(raop_conn_t *conn,
                       http_request_t *request, http_response_t *response,
                       char **response_data, int *response_datalen)
  {
 -    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
-+    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETRATEANCHORTIME");
++    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETPEERSX, SETRATEANCHORTIME, ANNOUNCE");
  }
  
  static void
-@@ -862,16 +879,20 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -599,6 +679,62 @@ raop_handler_setup(raop_conn_t *conn,
+     int data_len = 0;
+     data = http_request_get_data(request, &data_len);
+ 
++    const char *transport = http_request_get_header(request, "Transport");
++    if (transport && conn->have_keys) {
++        logger_log(raop->logger, LOGGER_INFO, "raop_handler_setup RAOP Transport: %s", transport);
++
++        unsigned short remote_cport = 0;
++        unsigned short timing_rport = 0;
++        const char *cp = strstr(transport, "control_port=");
++        if (cp) remote_cport = (unsigned short) atoi(cp + 13);
++        const char *tp = strstr(transport, "timing_port=");
++        if (tp) timing_rport = (unsigned short) atoi(tp + 12);
++
++        char remote[40] = { 0 };
++        utils_ipaddress_to_string(conn->remotelen, conn->remote, conn->zone_id, remote, (int) sizeof(remote));
++
++        timing_protocol_t time_protocol = NTP;
++        unsigned short timing_lport = raop->timing_lport;
++        if (!conn->raop_ntp) {
++            conn->raop_ntp = raop_ntp_init(raop->logger, &raop->callbacks, remote,
++                                           conn->remotelen, timing_rport, &time_protocol);
++            if (timing_rport) {
++                raop_ntp_start(conn->raop_ntp, &timing_lport);
++            }
++        }
++
++        if (!conn->raop_rtp) {
++            conn->raop_rtp = raop_rtp_init(raop->logger, &raop->callbacks, conn->raop_ntp,
++                                           remote, conn->remotelen, conn->aeskey, conn->aesiv);
++        }
++
++        unsigned short cport = raop->control_lport, dport = raop->data_lport;
++        unsigned char ct = 2; // ALAC
++        unsigned int sr = AUDIO_SAMPLE_RATE;
++
++        if (raop->callbacks.audio_get_format) {
++            unsigned short spf = 352;
++            bool isMedia = true;
++            bool usingScreen = false;
++            uint64_t audioFormat = 0;
++            raop->callbacks.audio_get_format(raop->callbacks.cls, &ct, &spf, &usingScreen, &isMedia, &audioFormat);
++        }
++
++        if (conn->raop_rtp) {
++            raop_rtp_start_audio(conn->raop_rtp, &remote_cport, &cport, &dport, &ct, &sr);
++            logger_log(raop->logger, LOGGER_INFO, "raop_rtp started for RAOP audio, dport=%u, cport=%u", dport, cport);
++        }
++
++        char resp_transport[256];
++        snprintf(resp_transport, sizeof(resp_transport),
++                 "RTP/AVP/UDP;unicast;mode=record;server_port=%u;control_port=%u;timing_port=%u",
++                 dport, cport, timing_lport);
++        http_response_add_header(response, "Transport", resp_transport);
++        http_response_add_header(response, "Session", "1");
++        http_response_add_header(response, "Audio-Jack-Status", "connected; type=digital");
++        return;
++    }
++
+     dacp_id = http_request_get_header(request, "DACP-ID");
+     active_remote_header = http_request_get_header(request, "Active-Remote");
+ 
+@@ -862,16 +998,20 @@ raop_handler_setup(raop_conn_t *conn,
          timing_protocol_t time_protocol = TP_NONE;
          plist_t req_timing_protocol_node = plist_dict_get_item(req_root_node, "timingProtocol");
          plist_get_string_val(req_timing_protocol_node, &timing_protocol);
@@ -400,7 +589,7 @@ index b779ece..ad95cf7 100644
                   logger_log(raop->logger, LOGGER_ERR, "Client specified timingProtocol=%s,"
                              " but timingProtocol= NTP is required here", timing_protocol);
               }
-@@ -889,6 +910,8 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -889,6 +1029,8 @@ raop_handler_setup(raop_conn_t *conn,
          }
          if (timing_rport) {
              logger_log(raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
@@ -409,7 +598,7 @@ index b779ece..ad95cf7 100644
          } else {
              logger_log(raop->logger, LOGGER_ERR, "Client did not supply timing_rport,"
                         " may be using unsupported AirPlay2 \"Remote Control\" protocol");
-@@ -910,7 +933,9 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -910,20 +1052,50 @@ raop_handler_setup(raop_conn_t *conn,
          }
          conn->raop_ntp = raop_ntp_init(raop->logger, &raop->callbacks, remote,
                                         conn->remotelen, (unsigned short) timing_rport, &time_protocol);
@@ -420,9 +609,22 @@ index b779ece..ad95cf7 100644
          conn->raop_rtp = raop_rtp_init(raop->logger, &raop->callbacks, conn->raop_ntp,
                                         remote, conn->remotelen, aeskey, aesiv);
          conn->raop_rtp_mirror = raop_rtp_mirror_init(raop->logger, &raop->callbacks,
-@@ -919,11 +944,24 @@ raop_handler_setup(raop_conn_t *conn,
-         /* the event port is not used in mirror mode or audio mode */
+                                                      conn->raop_ntp, remote, conn->remotelen, aeskey);
+ 
+-        /* the event port is not used in mirror mode or audio mode */
++        /* Open a bound TCP listening socket for AirPlay 2 eventPort */
          unsigned short event_port = 0;
++        int use_ipv6_event = (conn->remotelen == 16) ? 1 : 0;
++        if (conn->event_sock != -1) {
++            CLOSESOCKET(conn->event_sock);
++            conn->event_sock = -1;
++        }
++        conn->event_sock = netutils_init_socket(&event_port, use_ipv6_event, 0);
++        if (conn->event_sock != -1) {
++            listen(conn->event_sock, 1);
++        } else {
++            event_port = 0;
++        }
          plist_t res_event_port_node = plist_new_uint(event_port);
 -        plist_t res_timing_port_node = plist_new_uint(timing_lport);
 -        plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);
@@ -433,11 +635,15 @@ index b779ece..ad95cf7 100644
 +            plist_t res_timing_port_node = plist_new_uint(0);
 +            plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);
 +
++            char local_ip[40] = { 0 };
++            utils_ipaddress_to_string(conn->locallen, conn->local, conn->zone_id, local_ip, (int) sizeof(local_ip));
++            const char *peer_ip = local_ip[0] ? local_ip : remote;
++
 +            plist_t timing_peer_info = plist_new_dict();
 +            plist_t addresses_array = plist_new_array();
-+            plist_array_append_item(addresses_array, plist_new_string(remote));
++            plist_array_append_item(addresses_array, plist_new_string(peer_ip));
 +            plist_dict_set_item(timing_peer_info, "Addresses", addresses_array);
-+            plist_dict_set_item(timing_peer_info, "ID", plist_new_string(remote));
++            plist_dict_set_item(timing_peer_info, "ID", plist_new_string(peer_ip));
 +            plist_dict_set_item(res_root_node, "timingPeerInfo", timing_peer_info);
 +        } else {
 +            plist_t res_timing_port_node = plist_new_uint(timing_lport);
@@ -448,7 +654,7 @@ index b779ece..ad95cf7 100644
      }
  
      // Process stream setup requests
-@@ -968,7 +1006,9 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -968,7 +1140,9 @@ raop_handler_setup(raop_conn_t *conn,
  
                  break;
                  }
@@ -459,7 +665,7 @@ index b779ece..ad95cf7 100644
                  // Audio
                  unsigned short cport = raop->control_lport, dport = raop->data_lport; 
                  unsigned short remote_cport = 0;
-@@ -977,12 +1017,16 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -977,12 +1151,16 @@ raop_handler_setup(raop_conn_t *conn,
  
                  uint64_t uint_val = 0;
                  plist_t req_stream_control_port_node = plist_dict_get_item(req_stream_node, "controlPort");
@@ -480,7 +686,7 @@ index b779ece..ad95cf7 100644
  
                  if (raop->callbacks.audio_get_format) {
                      /* get additional audio format parameters  */
-@@ -993,11 +1037,15 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -993,11 +1171,15 @@ raop_handler_setup(raop_conn_t *conn,
                      uint8_t bool_val = 0;
  
                      plist_t req_stream_spf_node = plist_dict_get_item(req_stream_node, "spf");
@@ -499,7 +705,45 @@ index b779ece..ad95cf7 100644
  
                      plist_t req_stream_is_media_node = plist_dict_get_item(req_stream_node, "isMedia");
                      if (req_stream_is_media_node) {
-@@ -1029,7 +1077,7 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -1018,9 +1200,35 @@ raop_handler_setup(raop_conn_t *conn,
+                     raop->callbacks.audio_get_format(raop->callbacks.cls, &ct, &spf, &usingScreen, &isMedia, &audioFormat);
+                 }
+ 
++                unsigned short spf_val = 0;
++                plist_t req_stream_spf_node_top = plist_dict_get_item(req_stream_node, "spf");
++                if (req_stream_spf_node_top) {
++                    plist_get_uint_val(req_stream_spf_node_top, &uint_val);
++                    spf_val = (unsigned short) uint_val;
++                }
++
++                unsigned char shk[32] = {0};
++                uint64_t shk_len = 0;
++                plist_t req_stream_shk_node = plist_dict_get_item(req_stream_node, "shk");
++                if (req_stream_shk_node) {
++                    char *shk_data = NULL;
++                    plist_get_data_val(req_stream_shk_node, &shk_data, &shk_len);
++                    if (shk_data && shk_len <= sizeof(shk)) {
++                        memcpy(shk, shk_data, shk_len);
++                    }
++                    if (shk_data) free(shk_data);
++                }
++
+                 if (conn->raop_rtp) {
+-                    raop_rtp_start_audio(conn->raop_rtp, &remote_cport, &cport, &dport, &ct, &sr);
+-                    logger_log(raop->logger, LOGGER_DEBUG, "RAOP initialized success");
++                    if (type == 103) {
++                        raop_rtp_start_buffered_audio(conn->raop_rtp, &remote_cport, &cport, &dport,
++                                                      &ct, &sr, &spf_val, shk, (int)shk_len);
++                        logger_log(raop->logger, LOGGER_INFO, "RAOP buffered audio (type 103) initialized: TCP dport=%u, UDP cport=%u, ct=%u, spf=%u, shk_len=%llu",
++                                   dport, cport, ct, spf_val, (unsigned long long)shk_len);
++                    } else {
++                        raop_rtp_start_audio(conn->raop_rtp, &remote_cport, &cport, &dport, &ct, &sr);
++                        logger_log(raop->logger, LOGGER_DEBUG, "RAOP initialized success");
++                    }
+                 } else {
+                     logger_log(raop->logger, LOGGER_ERR, "RAOP not initialized at SETUP, playing will fail!");
+                     http_response_set_disconnect(response, 1);
+@@ -1029,10 +1237,29 @@ raop_handler_setup(raop_conn_t *conn,
                  plist_t res_stream_node = plist_new_dict();
                  plist_t res_stream_data_port_node = plist_new_uint(dport);
                  plist_t res_stream_control_port_node = plist_new_uint(cport);
@@ -508,7 +752,29 @@ index b779ece..ad95cf7 100644
                  plist_dict_set_item(res_stream_node, "dataPort", res_stream_data_port_node);
                  plist_dict_set_item(res_stream_node, "controlPort", res_stream_control_port_node);
                  plist_dict_set_item(res_stream_node, "type", res_stream_type_node);
-@@ -1214,6 +1262,24 @@ raop_handler_record(raop_conn_t *conn,
++                if (type == 103) {
++                    plist_dict_set_item(res_stream_node, "audioBufferSize", plist_new_uint(8388608));
++                }
++
++                plist_t req_stream_id_node = plist_dict_get_item(req_stream_node, "streamID");
++                if (req_stream_id_node) {
++                    uint64_t stream_id = 1;
++                    plist_get_uint_val(req_stream_id_node, &stream_id);
++                    plist_dict_set_item(res_stream_node, "streamID", plist_new_uint(stream_id));
++                } else {
++                    plist_dict_set_item(res_stream_node, "streamID", plist_new_uint(type == 103 ? 1 : 0));
++                }
++
++                plist_t req_stream_conn_id = plist_dict_get_item(req_stream_node, "streamConnectionID");
++                if (req_stream_conn_id) {
++                    uint64_t conn_id = 0;
++                    plist_get_uint_val(req_stream_conn_id, &conn_id);
++                    plist_dict_set_item(res_stream_node, "streamConnectionID", plist_new_uint(conn_id));
++                }
+                 plist_array_append_item(res_streams_node, res_stream_node);
+ 
+                 break;
+@@ -1214,6 +1441,109 @@ raop_handler_record(raop_conn_t *conn,
      http_response_add_header(response, "Audio-Jack-Status", "connected; type=analog");
  }
  
@@ -527,13 +793,98 @@ index b779ece..ad95cf7 100644
 +                               char **response_data, int *response_datalen)
 +{
 +    raop_t *raop = conn->raop;
-+    logger_log(raop->logger, LOGGER_INFO, "raop_handler_setrateanchortime: playback anchor acknowledged");
++    const char *data = NULL;
++    int data_len = 0;
++    data = http_request_get_data(request, &data_len);
++    uint64_t rate_val = 0;
++    uint64_t rtp_time_val = 0;
++    if (data && data_len > 0) {
++        plist_t req_root_node = NULL;
++        plist_from_bin(data, data_len, &req_root_node);
++        if (req_root_node) {
++            plist_t rate_node = plist_dict_get_item(req_root_node, "rate");
++            if (rate_node) {
++                plist_type t = plist_get_node_type(rate_node);
++                if (t == PLIST_REAL) {
++                    double d = 0;
++                    plist_get_real_val(rate_node, &d);
++                    rate_val = (d > 0.5) ? 1 : 0;
++                } else if (t == PLIST_UINT) {
++                    plist_get_uint_val(rate_node, &rate_val);
++                }
++            }
++            plist_t rtp_node = plist_dict_get_item(req_root_node, "rtpTime");
++            if (rtp_node) plist_get_uint_val(rtp_node, &rtp_time_val);
++            plist_free(req_root_node);
++        }
++    }
++    uint64_t net_secs = 0;
++    uint64_t net_frac = 0;
++    if (data && data_len > 0) {
++        plist_t req_root_node2 = NULL;
++        plist_from_bin(data, data_len, &req_root_node2);
++        if (req_root_node2) {
++            plist_t s_node = plist_dict_get_item(req_root_node2, "networkTimeSecs");
++            if (s_node) plist_get_uint_val(s_node, &net_secs);
++            plist_t f_node = plist_dict_get_item(req_root_node2, "networkTimeFrac");
++            if (f_node) plist_get_uint_val(f_node, &net_frac);
++            plist_free(req_root_node2);
++        }
++    }
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_setrateanchortime: rate=%llu rtpTime=%llu netSecs=%llu netFrac=%llu",
++               (unsigned long long)rate_val, (unsigned long long)rtp_time_val,
++               (unsigned long long)net_secs, (unsigned long long)net_frac);
++    if (conn->raop_rtp) {
++        raop_rtp_set_anchor(conn->raop_rtp, (uint32_t)rate_val, (uint32_t)rtp_time_val, net_secs, net_frac);
++    }
++}
++
++static void
++raop_handler_flushbuffered(raop_conn_t *conn,
++                           http_request_t *request, http_response_t *response,
++                           char **response_data, int *response_datalen)
++{
++    raop_t *raop = conn->raop;
++    const char *data = NULL;
++    int data_len = 0;
++    data = http_request_get_data(request, &data_len);
++    int64_t flush_from_seq = -1;
++    int64_t flush_until_seq = -1;
++    uint64_t flush_until_ts = 0;
++    if (data && data_len > 0) {
++        plist_t req_root_node = NULL;
++        plist_from_bin(data, data_len, &req_root_node);
++        if (req_root_node) {
++            plist_t from_node = plist_dict_get_item(req_root_node, "flushFromSeq");
++            if (from_node) {
++                uint64_t v = 0;
++                plist_get_uint_val(from_node, &v);
++                flush_from_seq = (int64_t)v;
++            }
++            plist_t until_node = plist_dict_get_item(req_root_node, "flushUntilSeq");
++            if (until_node) {
++                uint64_t v = 0;
++                plist_get_uint_val(until_node, &v);
++                flush_until_seq = (int64_t)v;
++            }
++            plist_t ts_node = plist_dict_get_item(req_root_node, "flushUntilTS");
++            if (ts_node) {
++                plist_get_uint_val(ts_node, &flush_until_ts);
++            }
++            plist_free(req_root_node);
++        }
++    }
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_flushbuffered: fromSeq=%lld untilSeq=%lld untilTS=%llu",
++               (long long)flush_from_seq, (long long)flush_until_seq, (unsigned long long)flush_until_ts);
++    if (conn->raop_rtp) {
++        raop_rtp_flush_buffered(conn->raop_rtp, flush_from_seq, flush_until_seq, (uint32_t)flush_until_ts);
++    }
 +}
 +
  static void
  raop_handler_flush(raop_conn_t *conn,
                        http_request_t *request, http_response_t *response,
-@@ -1259,7 +1325,7 @@ raop_handler_teardown(raop_conn_t *conn,
+@@ -1259,7 +1589,7 @@ raop_handler_teardown(raop_conn_t *conn,
              plist_t req_stream_node = plist_array_get_item(req_streams_node,i);
              plist_t req_stream_type_node = plist_dict_get_item(req_stream_node, "type");
              plist_get_uint_val(req_stream_type_node, &val);
@@ -542,3 +893,633 @@ index b779ece..ad95cf7 100644
                  teardown_96 = true;
              } else if (val == 110) { 
                  teardown_110 = true;
+@@ -1269,7 +1599,7 @@ raop_handler_teardown(raop_conn_t *conn,
+     plist_free(req_root_node);
+     logger_log(raop->logger, LOGGER_DEBUG, "TEARDOWN request,  96=%d, 110=%d", teardown_96, teardown_110);
+   
+-    http_response_add_header(response, "Connection", "close");
++    if (!teardown_96 && !teardown_110) http_response_add_header(response, "Connection", "close");
+   
+     if (teardown_96) {
+         if (conn->raop_rtp) {
+diff --git a/lib/raop_ntp.c b/lib/raop_ntp.c
+index c8eac2b..792833c 100644
+--- a/lib/raop_ntp.c
++++ b/lib/raop_ntp.c
+@@ -232,6 +232,14 @@ void raop_ntp_session_destroy(raop_ntp_session_t *ntp_session) {
+ }
+ 
+ /* for use in syncing audio before a first rtp_sync */
++void raop_ntp_set_sync_offset(raop_ntp_t *raop_ntp, int64_t offset) {
++    if (!raop_ntp) return;
++    MUTEX_LOCK(raop_ntp->sync_params_mutex);
++    raop_ntp->sync_offset = offset;
++    raop_ntp->client_time_received = true;
++    MUTEX_UNLOCK(raop_ntp->sync_params_mutex);
++}
++
+ void raop_ntp_set_video_arrival_offset(raop_ntp_t* raop_ntp, const uint64_t *offset) {
+     raop_ntp->video_arrival_offset = *offset;
+ }
+diff --git a/lib/raop_ntp.h b/lib/raop_ntp.h
+index 61aaa71..17180bc 100644
+--- a/lib/raop_ntp.h
++++ b/lib/raop_ntp.h
+@@ -60,6 +60,7 @@ uint64_t raop_ntp_get_remote_time(raop_ntp_t *raop_ntp);
+ uint64_t raop_ntp_convert_remote_time(raop_ntp_t *raop_ntp, uint64_t remote_time);
+ uint64_t raop_ntp_convert_local_time(raop_ntp_t *raop_ntp, uint64_t local_time);
+ 
++void raop_ntp_set_sync_offset(raop_ntp_t *raop_ntp, int64_t offset);
+ void  raop_ntp_set_video_arrival_offset(raop_ntp_t* raop_ntp, const uint64_t *offset);
+ uint64_t raop_ntp_get_video_arrival_offset(raop_ntp_t* raop_ntp);
+ 
+diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
+index 35d42df..33a0531 100644
+--- a/lib/raop_rtp.c
++++ b/lib/raop_rtp.c
+@@ -21,6 +21,8 @@
+ #include <assert.h>
+ #include <errno.h>
+ #include <stdbool.h>
++#include <unistd.h>
++#include <openssl/evp.h>
+ 
+ #include "raop_rtp.h"
+ #include "raop.h"
+@@ -109,6 +111,23 @@ struct raop_rtp_s {
+ 
+     /* audio compression type: ct = 2 (ALAC), ct = 8 (AAC_ELD) (ct = 4 would be AAC-MAIN) */
+     unsigned char ct;
++
++    /* AirPlay 2 Buffered Audio (type 103 over TCP with ChaCha20-Poly1305) */
++    int tsock;
++    int tcp_client_sock;
++    bool is_buffered;
++    unsigned short spf;
++    unsigned char shk[32];
++    int shk_len;
++    uint32_t buffered_rate;
++    uint32_t anchor_rtp;
++    bool anchor_valid;
++    bool has_anchored;
++    uint64_t anchor_local_ns;
++    int64_t flush_from_seq;
++    int64_t flush_until_seq;
++    uint32_t flush_until_ts;
++    bool buffered_flush_pending;
+ };
+ 
+ static int
+@@ -176,6 +195,16 @@ raop_rtp_init(logger_t *logger, raop_callbacks_t *callbacks, raop_ntp_t *ntp, co
+     raop_rtp->running = 0;
+     raop_rtp->joined = 1;
+     raop_rtp->flush = NO_FLUSH;
++    raop_rtp->csock = -1;
++    raop_rtp->dsock = -1;
++    raop_rtp->tsock = -1;
++    raop_rtp->tcp_client_sock = -1;
++    raop_rtp->flush_from_seq = -1;
++    raop_rtp->flush_until_seq = -1;
++    raop_rtp->anchor_valid = false;
++    raop_rtp->has_anchored = false;
++    raop_rtp->anchor_local_ns = 0;
++    raop_rtp->anchor_rtp = 0;
+ 
+     MUTEX_CREATE(raop_rtp->run_mutex);
+     return raop_rtp;
+@@ -318,6 +347,7 @@ raop_rtp_process_events(raop_rtp_t *raop_rtp, void *cb_data)
+ 
+     /* Handle flush if requested */
+     if (flush != NO_FLUSH) {
++        raop_buffer_flush(raop_rtp->buffer, flush);
+         if (raop_rtp->callbacks.audio_flush) {
+             raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
+         }
+@@ -477,7 +507,7 @@ raop_rtp_thread_udp(void *arg)
+                                packetlen, seqnum, str);
+                     free (str);
+                 }
+-            } else if (type_c == 0x54 && packetlen >= 20) {
++            } else if ((type_c == 0x54 || type_c == 0x57) && packetlen >= 20) {
+                 /* packet[0] = 0x90 (first sync ?) or 0x80 (subsequent ones)
+                  * packet[1] = 0xd4,  (0xd4 && ~0x80 = type 0x54)
+                  * packet[2:3] = 0x00 0x04
+@@ -498,8 +528,17 @@ raop_rtp_thread_udp(void *arg)
+                    rtp_sync_prev = raop_rtp->rtp_sync;
+                 }
+                 raop_rtp->rtp_sync = byteutils_get_int_be(packet, 4);
+-                uint64_t sync_ntp_raw = byteutils_get_long_be(packet, 8);
+-                raop_rtp->client_ntp_sync = raop_remote_timestamp_to_nano_seconds(raop_rtp->ntp, sync_ntp_raw);
++                if (type_c == 0x57) {
++                    raop_rtp->client_ntp_sync = byteutils_get_long_be(packet, 8);
++                } else {
++                    uint64_t sync_ntp_raw = byteutils_get_long_be(packet, 8);
++                    raop_rtp->client_ntp_sync = raop_remote_timestamp_to_nano_seconds(raop_rtp->ntp, sync_ntp_raw);
++                }
++                if (client_ntp_sync_prev == 0 && raop_rtp->ntp) {
++                    uint64_t local_now = raop_ntp_get_local_time();
++                    raop_ntp_set_sync_offset(raop_rtp->ntp, (int64_t)raop_rtp->client_ntp_sync - (int64_t)local_now);
++                }
++                logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp sync update (type_c=0x%02x): rtp_sync=%u client_sync=%llu", type_c, raop_rtp->rtp_sync, (unsigned long long)raop_rtp->client_ntp_sync);
+  
+                 if (logger_debug) {
+                     double offset_change = ((double) raop_rtp->client_ntp_sync) - raop_rtp->rtp_clock_rate * raop_rtp->rtp_sync;
+@@ -598,8 +637,14 @@ raop_rtp_thread_udp(void *arg)
+             raop_buffer_enqueue(raop_rtp->buffer, packet, packetlen, 1);
+ 
+             if (!raop_rtp->initial_sync) {
+-                /* wait until the first sync before dequeing ALAC */
+-                continue;
++                if (raop_rtp->ntp == NULL || raop_ntp_get_port(raop_rtp->ntp) == 0) {
++                    raop_rtp->initial_sync = true;
++                    raop_rtp->rtp_sync = byteutils_get_int_be(packet, 4);
++                    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp initial_sync auto-enabled on packet in PTP mode (rtp_sync=%u)", raop_rtp->rtp_sync);
++                } else {
++                    /* wait until the first sync before dequeing ALAC */
++                    continue;
++                }
+             } else {
+             // Render continuous buffer entries
+                 void *payload = NULL;
+@@ -690,6 +735,448 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
+     MUTEX_UNLOCK(raop_rtp->run_mutex);
+ }
+ 
++
++static int
++raop_rtp_read_exact(raop_rtp_t *raop_rtp, int sock, unsigned char *buf, int len)
++{
++    int got = 0;
++    while (got < len) {
++        if (raop_rtp_process_events(raop_rtp, NULL)) {
++            return -1;
++        }
++        fd_set rfds;
++        struct timeval tv;
++        tv.tv_sec = 0;
++        tv.tv_usec = 10000; /* 10ms */
++        FD_ZERO(&rfds);
++        FD_SET(sock, &rfds);
++        int nfds = sock + 1;
++        if (raop_rtp->csock != -1) {
++            FD_SET(raop_rtp->csock, &rfds);
++            if (raop_rtp->csock >= nfds) nfds = raop_rtp->csock + 1;
++        }
++        int sret = select(nfds, &rfds, NULL, NULL, &tv);
++        if (sret == 0) {
++            continue;
++        } else if (sret < 0) {
++            if (errno == EINTR) continue;
++            return -1;
++        }
++        if (raop_rtp->csock != -1 && FD_ISSET(raop_rtp->csock, &rfds)) {
++            unsigned char cbuf[256];
++            recvfrom(raop_rtp->csock, (char *)cbuf, sizeof(cbuf), 0, NULL, NULL);
++        }
++        if (FD_ISSET(sock, &rfds)) {
++            int r = recv(sock, (char *)(buf + got), len - got, 0);
++            if (r <= 0) {
++                if (r < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
++                    continue;
++                }
++                return -1;
++            }
++            got += r;
++        }
++    }
++    return got;
++}
++
++static int
++raop_rtp_decrypt_chacha(const unsigned char *key,
++                        const unsigned char *nonce8,
++                        const unsigned char *aad, int aad_len,
++                        const unsigned char *tag,
++                        const unsigned char *ciphertext, int ciphertext_len,
++                        unsigned char *plaintext, int *plaintext_len)
++{
++    if (ciphertext_len < 0) return -1;
++    unsigned char iv[12];
++    memset(iv, 0, 4);
++    memcpy(iv + 4, nonce8, 8);
++
++    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
++    if (!ctx) return -1;
++
++    int ok = 0;
++    int len = 0;
++    int out_len = 0;
++
++    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), NULL, NULL, NULL) != 1) goto done;
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, 12, NULL) != 1) goto done;
++    if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto done;
++    if (aad && aad_len > 0) {
++        if (EVP_DecryptUpdate(ctx, NULL, &len, aad, aad_len) != 1) goto done;
++    }
++    if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) goto done;
++    out_len = len;
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, 16, (void *)tag) != 1) goto done;
++    if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) <= 0) goto done;
++    out_len += len;
++    *plaintext_len = out_len;
++    ok = 1;
++
++done:
++    EVP_CIPHER_CTX_free(ctx);
++    return ok ? 0 : -1;
++}
++
++static THREAD_RETVAL
++raop_rtp_thread_tcp(void *arg)
++{
++    raop_rtp_t *raop_rtp = arg;
++    assert(raop_rtp);
++    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp started, waiting for TCP connection on port %u", raop_rtp->data_lport);
++
++    int client_sock = -1;
++    while (client_sock == -1) {
++        if (raop_rtp_process_events(raop_rtp, NULL)) {
++            goto exit_thread;
++        }
++        fd_set rfds;
++        struct timeval tv;
++        tv.tv_sec = 0;
++        tv.tv_usec = 20000; /* 20ms */
++        FD_ZERO(&rfds);
++        FD_SET(raop_rtp->tsock, &rfds);
++        int ret = select(raop_rtp->tsock + 1, &rfds, NULL, NULL, &tv);
++        if (ret > 0 && FD_ISSET(raop_rtp->tsock, &rfds)) {
++            struct sockaddr_storage caddr;
++            socklen_t caddrlen = sizeof(caddr);
++            client_sock = accept(raop_rtp->tsock, (struct sockaddr *)&caddr, &caddrlen);
++            if (client_sock != -1) {
++                MUTEX_LOCK(raop_rtp->run_mutex);
++                raop_rtp->tcp_client_sock = client_sock;
++                MUTEX_UNLOCK(raop_rtp->run_mutex);
++                logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: accepted TCP connection (sock=%d)", client_sock);
++            }
++        } else if (ret < 0 && errno != EINTR) {
++            logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: select on tsock failed: %d", errno);
++            goto exit_thread;
++        }
++    }
++
++    unsigned char *packet = (unsigned char *)malloc(65536);
++    unsigned char *plaintext = (unsigned char *)malloc(65536);
++    if (!packet || !plaintext) {
++        free(packet);
++        free(plaintext);
++        goto exit_thread;
++    }
++
++    uint64_t thread_start_ns = raop_ntp_get_local_time();
++    const uint64_t lead_ns = 600000000ULL; /* Keep ~600ms ahead in TimelineBuffer */
++    const unsigned int spf = (raop_rtp->spf > 0) ? raop_rtp->spf : 1024;
++    uint32_t pkt_count = 0;
++
++    while (1) {
++        if (raop_rtp_process_events(raop_rtp, NULL)) {
++            break;
++        }
++
++        /* Handle pending audio flush */
++        MUTEX_LOCK(raop_rtp->run_mutex);
++        bool flush_pend = raop_rtp->buffered_flush_pending;
++        int64_t f_from = raop_rtp->flush_from_seq;
++        int64_t f_until = raop_rtp->flush_until_seq;
++        if (flush_pend && f_from <= 0) {
++            raop_rtp->buffered_flush_pending = false;
++        }
++        MUTEX_UNLOCK(raop_rtp->run_mutex);
++
++        if (flush_pend && f_from <= 0) {
++            if (raop_rtp->callbacks.audio_flush) {
++                raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
++            }
++        }
++
++        unsigned char len_buf[2];
++        if (raop_rtp_read_exact(raop_rtp, client_sock, len_buf, 2) < 0) {
++            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet length");
++            break;
++        }
++        uint16_t packet_len = ((uint16_t)len_buf[0] << 8) | (uint16_t)len_buf[1];
++        if (packet_len < 2) {
++            continue;
++        }
++        int nread = (int)packet_len - 2;
++        if (raop_rtp_read_exact(raop_rtp, client_sock, packet, nread) < 0) {
++            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet body (%d bytes)", nread);
++            break;
++        }
++        if (nread < 36) {
++            continue;
++        }
++
++        /* 23-bit sequence number */
++        uint32_t seqnum = (((uint32_t)(packet[1] & 0x7f) << 16) |
++                           ((uint32_t)packet[2] << 8) |
++                           (uint32_t)packet[3]);
++        uint32_t rtp_timestamp = byteutils_get_int_be(packet, 4);
++
++        /* Check FLUSHBUFFERED range */
++        MUTEX_LOCK(raop_rtp->run_mutex);
++        f_from = raop_rtp->flush_from_seq;
++        f_until = raop_rtp->flush_until_seq;
++        flush_pend = raop_rtp->buffered_flush_pending;
++        if (f_until >= 0) {
++            if (f_from <= 0 || seqnum >= (uint32_t)f_from) {
++                if (seqnum < (uint32_t)f_until) {
++                    if (flush_pend) {
++                        raop_rtp->buffered_flush_pending = false;
++                        MUTEX_UNLOCK(raop_rtp->run_mutex);
++                        if (raop_rtp->callbacks.audio_flush) {
++                            raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
++                        }
++                                            } else {
++                        MUTEX_UNLOCK(raop_rtp->run_mutex);
++                    }
++                    continue; /* Drop flushed packet at wire speed */
++                } else {
++                    /* Reached flushUntilSeq: clear flush state */
++                    raop_rtp->flush_from_seq = -1;
++                    raop_rtp->flush_until_seq = -1;
++                    raop_rtp->buffered_flush_pending = false;
++                    MUTEX_UNLOCK(raop_rtp->run_mutex);
++                    if (flush_pend && raop_rtp->callbacks.audio_flush) {
++                        raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
++                    }
++                                        logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: flush completed at seqnum=%u rtp=%u", seqnum, rtp_timestamp);
++                }
++            } else {
++                MUTEX_UNLOCK(raop_rtp->run_mutex);
++            }
++        } else {
++            MUTEX_UNLOCK(raop_rtp->run_mutex);
++        }
++
++        const unsigned char *aad = packet + 4; /* 8 bytes: timestamp + ssrc */
++        const unsigned char *ciphertext = packet + 12;
++        int ciphertext_len = nread - 36;
++        const unsigned char *tag = packet + nread - 24;
++        const unsigned char *nonce8 = packet + nread - 8;
++
++        int plaintext_len = 0;
++        if (raop_rtp_decrypt_chacha(raop_rtp->shk, nonce8, aad, 8, tag,
++                                    ciphertext, ciphertext_len,
++                                    plaintext, &plaintext_len) < 0) {
++            if (pkt_count < 10) {
++                logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: ChaCha20-Poly1305 decrypt failed at seqnum=%u nread=%d", seqnum, nread);
++            }
++            continue;
++        }
++
++        if (pkt_count == 0 || (pkt_count % 200) == 0) {
++            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: decoded pkt #%u seqnum=%u rtp=%u len=%d",
++                       pkt_count, seqnum, rtp_timestamp, plaintext_len);
++        }
++        pkt_count++;
++
++        /* Anchor-time sync (PTP fallback: unrooted Android cannot bind ports 319/320).
++         * Hold the packet until SETRATEANCHORTIME (rate=1) has supplied an anchor, then
++         * derive its absolute presentation time:
++         *   pts = anchor_local_ns + (rtp - anchor_rtp) * ns_per_frame
++         * Every receiver in the group gets the same anchor at ~the same instant, so they
++         * all schedule a given rtp frame at the same wall-clock moment. */
++        uint64_t pts_local_ns = 0;
++        for (;;) {
++            if (raop_rtp_process_events(raop_rtp, NULL)) goto loop_end;
++            MUTEX_LOCK(raop_rtp->run_mutex);
++            bool a_valid = raop_rtp->anchor_valid;
++            bool a_ever = raop_rtp->has_anchored;
++            uint64_t a_local = raop_rtp->anchor_local_ns;
++            uint32_t a_rtp = raop_rtp->anchor_rtp;
++            bool in_flush = raop_rtp->flush_until_seq >= 0 &&
++                            (raop_rtp->flush_from_seq <= 0 || seqnum >= (uint32_t)raop_rtp->flush_from_seq) &&
++                            seqnum < (uint32_t)raop_rtp->flush_until_seq;
++            MUTEX_UNLOCK(raop_rtp->run_mutex);
++            if (in_flush) goto next_packet;
++            uint64_t now_ns = raop_ntp_get_local_time();
++            if (a_valid) {
++                int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
++                int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
++                pts_local_ns = (uint64_t)((int64_t)a_local + off_ns);
++                /* pace: keep decoded audio at most lead_ns ahead of its play time */
++                if ((int64_t)(pts_local_ns - now_ns) <= (int64_t)lead_ns) break;
++            } else if (!a_ever && (now_ns - thread_start_ns) > 2000000000ULL) {
++                /* sender never anchored: legacy unscheduled playback */
++                break;
++            }
++            usleep(5000);
++        }
++        
++        audio_decode_struct audio_data;
++        memset(&audio_data, 0, sizeof(audio_data));
++        audio_data.rtp_time = rtp_timestamp;
++        audio_data.seqnum = (unsigned short)(seqnum & 0xffff);
++        audio_data.data_len = plaintext_len;
++        audio_data.data = plaintext;
++        audio_data.ct = raop_rtp->ct;
++        audio_data.ntp_time_remote = 0;
++        audio_data.ntp_time_local = pts_local_ns;
++
++        raop_rtp->callbacks.audio_process(raop_rtp->callbacks.cls, raop_rtp->ntp, &audio_data);
++
++next_packet:
++        ;
++    }
++
++loop_end:
++    free(packet);
++    free(plaintext);
++
++exit_thread:
++    MUTEX_LOCK(raop_rtp->run_mutex);
++    if (raop_rtp->tcp_client_sock != -1) {
++        CLOSESOCKET(raop_rtp->tcp_client_sock);
++        raop_rtp->tcp_client_sock = -1;
++    }
++    raop_rtp->running = 0;
++    MUTEX_UNLOCK(raop_rtp->run_mutex);
++    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp exiting");
++    return 0;
++}
++
++void
++raop_rtp_start_buffered_audio(raop_rtp_t *raop_rtp, unsigned short *control_rport,
++                              unsigned short *control_lport, unsigned short *data_lport,
++                              unsigned char *ct, unsigned int *sr, unsigned short *spf,
++                              const unsigned char *shk, int shk_len)
++{
++    assert(raop_rtp);
++    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp starting buffered audio (type 103)");
++
++    MUTEX_LOCK(raop_rtp->run_mutex);
++    if (raop_rtp->running || !raop_rtp->joined) {
++        MUTEX_UNLOCK(raop_rtp->run_mutex);
++        return;
++    }
++
++    raop_rtp->is_buffered = true;
++    raop_rtp->ct = *ct;
++    raop_rtp->spf = (*spf > 0) ? *spf : 1024;
++    raop_rtp->rtp_clock_rate = (double)SECOND_IN_NSECS / (double)(*sr > 0 ? *sr : 44100);
++    memset(raop_rtp->shk, 0, sizeof(raop_rtp->shk));
++    if (shk && shk_len > 0) {
++        int copy_len = (shk_len > 32) ? 32 : shk_len;
++        memcpy(raop_rtp->shk, shk, copy_len);
++        raop_rtp->shk_len = copy_len;
++    }
++    raop_rtp->buffered_rate = 0;
++    raop_rtp->anchor_valid = false;
++    raop_rtp->has_anchored = false;
++    raop_rtp->anchor_local_ns = 0;
++    raop_rtp->anchor_rtp = 0;
++    raop_rtp->flush_from_seq = -1;
++    raop_rtp->flush_until_seq = -1;
++    raop_rtp->flush_until_ts = 0;
++    raop_rtp->buffered_flush_pending = false;
++
++    int use_ipv6 = (raop_rtp->remote_saddr.ss_family == AF_INET6) ? 1 : 0;
++    unsigned short cport = *control_lport;
++    unsigned short dport = *data_lport;
++    int csock = netutils_init_socket(&cport, use_ipv6, 1); /* UDP control socket */
++    int tsock = netutils_init_socket(&dport, use_ipv6, 0); /* TCP data listening socket */
++    if (csock == -1 || tsock == -1 || listen(tsock, 1) < 0) {
++        logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_start_buffered_audio socket init failed (csock=%d tsock=%d)", csock, tsock);
++        if (csock != -1) CLOSESOCKET(csock);
++        if (tsock != -1) CLOSESOCKET(tsock);
++        MUTEX_UNLOCK(raop_rtp->run_mutex);
++        return;
++    }
++
++    raop_rtp->csock = csock;
++    raop_rtp->dsock = -1;
++    raop_rtp->tsock = tsock;
++    raop_rtp->tcp_client_sock = -1;
++    raop_rtp->control_lport = cport;
++    raop_rtp->data_lport = dport;
++    raop_rtp->control_rport = *control_rport;
++    *control_lport = cport;
++    *data_lport = dport;
++
++    raop_rtp->running = 1;
++    raop_rtp->joined = 0;
++    THREAD_CREATE(raop_rtp->thread, raop_rtp_thread_tcp, raop_rtp);
++    MUTEX_UNLOCK(raop_rtp->run_mutex);
++}
++
++void
++raop_rtp_set_anchor(raop_rtp_t *raop_rtp, uint32_t rate, uint32_t rtp_time, uint64_t net_secs, uint64_t net_frac)
++{
++    if (!raop_rtp) return;
++    bool do_flush = false;
++    MUTEX_LOCK(raop_rtp->run_mutex);
++    if (raop_rtp->is_buffered && raop_rtp->buffered_rate != 0 && rate == 0) {
++        do_flush = true;
++    }
++    raop_rtp->buffered_rate = rate;
++    if (rate != 0) {
++        uint64_t local_mono_ns = raop_ntp_get_local_time();
++        uint64_t calc_anchor = local_mono_ns;
++        if (net_secs > 0) {
++            uint64_t secs = net_secs;
++            if (secs > 2000000000ULL) {
++                secs -= 2208988800ULL; /* Convert NTP epoch (1900) to POSIX epoch (1970) */
++            }
++            uint64_t frac_ns = 0;
++            if (net_frac > 0xFFFFFFFFULL) {
++                frac_ns = (uint64_t)(((double)net_frac / 18446744073709551616.0) * 1e9);
++            } else {
++                frac_ns = (uint64_t)(((double)net_frac / 4294967296.0) * 1e9);
++            }
++            int64_t target_real_ns = (int64_t)secs * 1000000000LL + (int64_t)frac_ns;
++            struct timespec ts;
++            clock_gettime(CLOCK_REALTIME, &ts);
++            int64_t now_real_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
++            int64_t diff_ns = target_real_ns - now_real_ns;
++            if (diff_ns > -5000000000LL && diff_ns < 10000000000LL) {
++                calc_anchor = (uint64_t)((int64_t)local_mono_ns + diff_ns);
++                logger_log(raop_rtp->logger, LOGGER_INFO,
++                           "raop_rtp_set_anchor: synced via networkTime, diff=%lldms",
++                           (long long)(diff_ns / 1000000LL));
++            } else {
++                logger_log(raop_rtp->logger, LOGGER_INFO,
++                           "raop_rtp_set_anchor: networkTime diff out of range (%lldms), using local arrival",
++                           (long long)(diff_ns / 1000000LL));
++            }
++        } else {
++            logger_log(raop_rtp->logger, LOGGER_INFO,
++                       "raop_rtp_set_anchor: net_secs=0, using local arrival");
++        }
++        raop_rtp->anchor_local_ns = calc_anchor;
++        raop_rtp->anchor_rtp = rtp_time;
++        raop_rtp->anchor_valid = true;
++        raop_rtp->has_anchored = true;
++        logger_log(raop_rtp->logger, LOGGER_INFO,
++                   "raop_rtp_set_anchor: rate=1 anchor_rtp=%u anchor_local_ns=%llu",
++                   rtp_time, (unsigned long long)calc_anchor);
++    } else {
++        raop_rtp->anchor_valid = false;
++        logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_set_anchor: rate=0 (paused)");
++    }
++    MUTEX_UNLOCK(raop_rtp->run_mutex);
++    if (do_flush && raop_rtp->callbacks.audio_flush) {
++        raop_rtp->callbacks.audio_flush(raop_rtp->callbacks.cls);
++    }
++}
++
++void
++raop_rtp_flush_buffered(raop_rtp_t *raop_rtp, int64_t flush_from_seq, int64_t flush_until_seq, uint32_t flush_until_ts)
++{
++    if (!raop_rtp) return;
++    MUTEX_LOCK(raop_rtp->run_mutex);
++    raop_rtp->flush_from_seq = flush_from_seq;
++    raop_rtp->flush_until_seq = flush_until_seq;
++    raop_rtp->flush_until_ts = flush_until_ts;
++    raop_rtp->buffered_flush_pending = true;
++    MUTEX_UNLOCK(raop_rtp->run_mutex);
++}
++
++void raop_rtp_set_initial_sync(raop_rtp_t *raop_rtp) {
++    if (!raop_rtp) return;
++    raop_rtp->initial_sync = true;
++    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp initial_sync unblocked for AirPlay 2 PTP");
++}
++
+ void
+ raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume)
+ {
+@@ -822,6 +1309,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
+         CLOSESOCKET(raop_rtp->dsock);
+         raop_rtp->dsock = -1;
+     }
++    if (raop_rtp->tsock != -1) {
++        CLOSESOCKET(raop_rtp->tsock);
++        raop_rtp->tsock = -1;
++    }
++    if (raop_rtp->tcp_client_sock != -1) {
++        CLOSESOCKET(raop_rtp->tcp_client_sock);
++        raop_rtp->tcp_client_sock = -1;
++    }
+ 
+     /* Flush buffer into initial state */
+     raop_buffer_flush(raop_rtp->buffer, -1);
+diff --git a/lib/raop_rtp.h b/lib/raop_rtp.h
+index d9f5476..bc4b692 100644
+--- a/lib/raop_rtp.h
++++ b/lib/raop_rtp.h
+@@ -35,6 +35,13 @@ raop_rtp_t *raop_rtp_init(logger_t *logger, raop_callbacks_t *callbacks, raop_nt
+ void raop_rtp_start_audio(raop_rtp_t *raop_rtp, unsigned short *control_rport, unsigned short *control_lport,
+                           unsigned short *data_lport, unsigned char *ct, unsigned int *sr);
+ 
++void raop_rtp_start_buffered_audio(raop_rtp_t *raop_rtp, unsigned short *control_rport,
++                                   unsigned short *control_lport, unsigned short *data_lport,
++                                   unsigned char *ct, unsigned int *sr, unsigned short *spf,
++                                   const unsigned char *shk, int shk_len);
++void raop_rtp_set_anchor(raop_rtp_t *raop_rtp, uint32_t rate, uint32_t rtp_time, uint64_t net_secs, uint64_t net_frac);
++void raop_rtp_flush_buffered(raop_rtp_t *raop_rtp, int64_t flush_from_seq, int64_t flush_until_seq, uint32_t flush_until_ts);
++void raop_rtp_set_initial_sync(raop_rtp_t *raop_rtp);
+ void raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume);
+ void raop_rtp_set_metadata(raop_rtp_t *raop_rtp, const char *data, int datalen);
+ void raop_rtp_set_coverart(raop_rtp_t *raop_rtp, const char *data, int datalen);

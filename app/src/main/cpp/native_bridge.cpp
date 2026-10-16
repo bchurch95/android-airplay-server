@@ -41,9 +41,9 @@ typedef struct {
 
 static void _log_callback(void *cls, int level, const char *msg) {
     int prio = ANDROID_LOG_DEBUG;
-    if (level >= 5) prio = ANDROID_LOG_ERROR;
-    else if (level >= 4) prio = ANDROID_LOG_WARN;
-    else if (level >= 3) prio = ANDROID_LOG_INFO;
+    if (level <= 3) prio = ANDROID_LOG_ERROR;
+    else if (level == 4) prio = ANDROID_LOG_WARN;
+    else if (level <= 6) prio = ANDROID_LOG_INFO;
     __android_log_print(prio, TAG, "%s", msg);
 }
 

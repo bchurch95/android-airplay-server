@@ -1,6 +1,9 @@
 package io.github.jqssun.airplay
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.media.MediaFormat
+import android.provider.Settings
 
 /** Centralized preference keys and defaults. */
 object Prefs {
@@ -8,6 +11,37 @@ object Prefs {
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
 
     const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Android AirPlay"
+
+    fun getDefaultServerName(context: Context): String {
+        try {
+            val btName = Settings.Secure.getString(context.contentResolver, "bluetooth_name")
+            if (!btName.isNullOrBlank()) return btName
+        } catch (_: Exception) {}
+
+        try {
+            val bt = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            val btName = bt?.name
+            if (!btName.isNullOrBlank()) return btName
+        } catch (_: Exception) {}
+
+        try {
+            val devName = Settings.Global.getString(context.contentResolver, "device_name")
+            if (!devName.isNullOrBlank() && devName != "Portal") return devName
+        } catch (_: Exception) {}
+
+        val model = android.os.Build.MODEL
+        if (!model.isNullOrBlank()) return "$model AirPlay"
+
+        return DEF_SERVER_NAME
+    }
+
+    fun getServerName(context: Context, prefs: SharedPreferences): String {
+        val saved = prefs.getString(SERVER_NAME, null)
+        if (!saved.isNullOrBlank() && saved != DEF_SERVER_NAME) {
+            return saved
+        }
+        return getDefaultServerName(context)
+    }
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     const val SERVER_PORT = "server_port"; const val DEF_SERVER_PORT = 7000
     const val AUTO_START = "auto_start"; const val DEF_AUTO_START = true
@@ -22,7 +56,7 @@ object Prefs {
     const val SCHEDULED_OUTPUT_BUFFER_RELEASE = "scheduled_output_buffer_release"; const val DEF_SCHEDULED_OUTPUT_BUFFER_RELEASE = false
     const val AUDIO_AUTO_BUFFER = "audio_auto_buffer"; const val DEF_AUDIO_AUTO_BUFFER = true
     // fixed cushion ms, used only when AUDIO_AUTO_BUFFER is off
-    const val AUDIO_CUSHION_MS = "audio_cushion_ms"; const val DEF_AUDIO_CUSHION_MS = 40
+    const val AUDIO_CUSHION_MS = "audio_cushion_ms"; const val DEF_AUDIO_CUSHION_MS = 150
     // slider step 0..4 mapping to arrival-delay percentile the cushion targets;
     // lower = less latency, higher = more stable
     const val AUDIO_ADAPTIVE_STEP = "audio_adaptive_step"; const val DEF_AUDIO_ADAPTIVE_STEP = 3

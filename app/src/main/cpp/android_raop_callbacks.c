@@ -105,8 +105,17 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
 static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     if (!ctx->audio_engine || !data->data || data->data_len <= 0) return;
+    int64_t pts_ns = 0;
+    if (data->ntp_time_local > 0) {
+        struct timespec real_ts, mono_ts;
+        clock_gettime(CLOCK_REALTIME, &real_ts);
+        clock_gettime(CLOCK_MONOTONIC, &mono_ts);
+        int64_t real_ns = (int64_t)real_ts.tv_sec * 1000000000LL + real_ts.tv_nsec;
+        int64_t mono_ns = (int64_t)mono_ts.tv_sec * 1000000000LL + mono_ts.tv_nsec;
+        pts_ns = (int64_t)data->ntp_time_local + (mono_ns - real_ns);
+    }
     audio_engine_decode(ctx->audio_engine, data->data, data->data_len,
-                        (int)data->ct, (int64_t)data->ntp_time_local);
+                        (int)data->ct, pts_ns);
 }
 
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
@@ -218,7 +227,13 @@ static void _video_reset(void *cls, reset_type_t t) {
         raop_remove_hls_connections(ctx->raop);
     }
 }
-static void _audio_flush(void *cls) { LOGI("audio_flush"); }
+static void _audio_flush(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("audio_flush");
+    if (ctx && ctx->audio_engine) {
+        audio_engine_flush(ctx->audio_engine);
+    }
+}
 
 static void _audio_stop_coverart_rendering(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
