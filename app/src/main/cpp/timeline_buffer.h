@@ -145,8 +145,8 @@ private:
     }
 
     static constexpr int MIN_CUSHION_MS = 0;             // algorithm already enforces effective floor
-    static constexpr int MAX_CUSHION_MS = 1000;
-    static constexpr int BUCKET_MS = 5;                  // histogram granularity
+    static constexpr int MAX_CUSHION_MS = 4000;          // Support AirPlay 2 2-3s forward multi-room buffer
+    static constexpr int BUCKET_MS = 10;                 // histogram granularity
     static constexpr int NBUCKETS = MAX_CUSHION_MS / BUCKET_MS;
     static constexpr int64_t BUCKET_NS = (int64_t)BUCKET_MS * 1000000LL;
     static constexpr int FORGET_SHIFT = 8;               // ~1/256 decay per packet (~6s @ 23ms)

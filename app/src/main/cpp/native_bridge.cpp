@@ -19,7 +19,9 @@ extern "C" {
 }
 
 #include "audio_engine.h"
+#include "audio_time.h"
 #include "log_sink.h"
+#include "ptp_client.h"
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -34,6 +36,7 @@ typedef struct {
     char hw_addr[6];
     std::string lang_requested, lang_subtitles, lang_system;
     std::shared_ptr<LogSink> log;
+    std::unique_ptr<PtpClient> ptp;
 } server_ctx_t;
 
 static void _log_callback(void *cls, int level, const char *msg) {
@@ -139,8 +142,14 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
 
     LOGI("AirPlay server started on port %d", port);
 
+    /* Start PTP client and advertise AirPlay 2 multi-room features */
+    ctx->ptp = std::make_unique<PtpClient>();
+    ctx->ptp->start();
+
     /* Register dnssd records (stored in shim, Kotlin reads them) */
     if (ctx->dnssd) {
+        dnssd_set_airplay_features(ctx->dnssd, 27, 1); // SupportsBufferedAudio
+        dnssd_set_airplay_features(ctx->dnssd, 28, 1); // SupportsPTP
         dnssd_register_raop(ctx->dnssd, port);
         dnssd_register_airplay(ctx->dnssd, port);
     }
@@ -155,6 +164,10 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStop(
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return;
+
+    if (ctx->ptp) {
+        ctx->ptp->stop();
+    }
 
     raop_stop_httpd(ctx->raop);
     LOGI("AirPlay server stopped");
@@ -173,6 +186,11 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeDestroy(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx) return;
 
+    if (ctx->ptp) {
+        ctx->ptp->stop();
+        ctx->ptp.reset();
+    }
+
     if (ctx->raop) {
         raop_destroy(ctx->raop);
         ctx->raop = NULL;
@@ -187,6 +205,22 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeDestroy(
     }
     android_callbacks_destroy(&ctx->cb_ctx, env);
     delete ctx;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeIsPtpSynced(
+        JNIEnv *env, jobject thiz, jlong handle) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    return (ctx && ctx->ptp && ctx->ptp->isSynchronized()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeGetPtpOffsetNs(
+        JNIEnv *env, jobject thiz, jlong handle) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    return (ctx && ctx->ptp) ? (jlong)ctx->ptp->getOffsetNs() : 0;
 }
 
 extern "C"
