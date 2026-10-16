@@ -1,5 +1,5 @@
 diff --git a/lib/global.h b/lib/global.h
-index 03f2dcb..4251d4f 100644
+index 03f2dcb..c2f1c08 100644
 --- a/lib/global.h
 +++ b/lib/global.h
 @@ -18,8 +18,8 @@
@@ -8,13 +8,227 @@ index 03f2dcb..4251d4f 100644
  
 -#define GLOBAL_MODEL    "AppleTV3,2"
 -#define GLOBAL_VERSION  "220.68"
-+#define GLOBAL_MODEL    "AirPort10,115"
-+#define GLOBAL_VERSION  "366.0"
++#define GLOBAL_MODEL    "AppleTV6,2"
++#define GLOBAL_VERSION  "380.20.1"
  
  /* use old protocol for audio AES key if client's User-Agent string is contained in these strings */
  /* replace xxx by any new User-Agent string as needed */
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index b92bf75..2ea84d7 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -53,18 +53,8 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+ 
+     plist_t r_node = plist_new_dict();
+ 
+-    /* first 12 AirPlay features bits (R to L): 0x27F = 0010 0111 1111
+-     * Only bits 0-6 and bit 9  are set:
+-     * 0. video supported
+-     * 1. photo supported
+-     * 2. video protected wirh FairPlay DRM
+-     * 3. volume control supported for video
+-     * 4. HLS supported
+-     * 5. slideshow supported
+-     * 6. (unknown)
+-     * 9. audio supported.
+-     */
+-    plist_t features_node = plist_new_uint(0x27F); 
++    uint64_t features = dnssd_get_airplay_features(raop->dnssd);
++    plist_t features_node = plist_new_uint(features); 
+     plist_dict_set_item(r_node, "features", features_node);
+ 
+     plist_t mac_address_node = plist_new_string(hw_addr);
+@@ -76,7 +66,7 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     plist_t os_build_node = plist_new_string("12B435");
+     plist_dict_set_item(r_node, "osBuildVersion", os_build_node);
+ 
+-    plist_t protovers_node = plist_new_string("1.0");
++    plist_t protovers_node = plist_new_string("1.1");
+     plist_dict_set_item(r_node, "protovers", protovers_node);
+ 
+     plist_t source_version_node = plist_new_string(GLOBAL_VERSION);
+@@ -88,15 +78,40 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     plist_t device_id_node = plist_new_string(hw_addr);
+     plist_dict_set_item(r_node, "deviceid", device_id_node);
+ 
+-    plist_to_xml(r_node, response_data, (uint32_t *) response_datalen);
++    char pi_unique[64] = {0};
++    if (hw_addr_raw && hw_addr_raw_len >= 6) {
++        snprintf(pi_unique, sizeof(pi_unique), "%02x%02x%02x%02x-%02x%02x-4000-8000-%02x%02x%02x%02x%02x%02x",
++                 (unsigned char)hw_addr_raw[0], (unsigned char)hw_addr_raw[1], (unsigned char)hw_addr_raw[2],
++                 (unsigned char)hw_addr_raw[3], (unsigned char)hw_addr_raw[4], (unsigned char)hw_addr_raw[5],
++                 (unsigned char)hw_addr_raw[0], (unsigned char)hw_addr_raw[1], (unsigned char)hw_addr_raw[2],
++                 (unsigned char)hw_addr_raw[3], (unsigned char)hw_addr_raw[4], (unsigned char)hw_addr_raw[5]);
++    } else {
++        strncpy(pi_unique, AIRPLAY_PI, sizeof(pi_unique) - 1);
++    }
++    plist_t pi_node = plist_new_string(pi_unique);
++    plist_dict_set_item(r_node, "pi", pi_node);
++    plist_t gid_node = plist_new_string(pi_unique);
++    plist_dict_set_item(r_node, "gid", gid_node);
++
++    if (raop->pk_str && strlen(raop->pk_str)) {
++        int pk_len = 0;
++        char *pk = utils_parse_hex(raop->pk_str, strlen(raop->pk_str), &pk_len);
++        if (pk) {
++            plist_t pk_node = plist_new_data(pk, pk_len);
++            plist_dict_set_item(r_node, "pk", pk_node);
++            free(pk);
++        }
++    }
+ 
+-    //assert(*response_datalen == strlen(*response_data));
++    int name_len = 0;
++    const char *name = dnssd_get_name(raop->dnssd, &name_len);
++    if (name) {
++        plist_t name_node = plist_new_string(name);
++        plist_dict_set_item(r_node, "name", name_node);
++    }
++
++    plist_to_xml(r_node, response_data, (uint32_t *) response_datalen);
+ 
+-    /* last character (at *response_data[response_datalen - 1]) is  0x0a = '\n'
+-     * (*response_data[response_datalen] is '\0').
+-     * apsdk removes the last "\n" by overwriting it with '\0', and reducing response_datalen by 1. 
+-     * TODO: check if this is necessary  */
+-    
+     plist_free(r_node);
+     http_response_add_header(response, "Content-Type", "text/x-apple-plist+xml");
+     free(hw_addr);
+diff --git a/lib/raop.c b/lib/raop.c
+index b6fc8f3..7adb6f0 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -260,14 +260,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+     }
+ 
+  /* this rejects messages from _airplay._tcp for video streaming protocol unless bool raop->hls_support is true*/   
+-    if (!cseq && !raop->hls_support && !ble) {
++    bool is_hls_stream = (url && (strstr(url, ".m3u8") || !strcmp(url, "/master.m3u8")));
++    if (is_hls_stream && !raop->hls_support && !ble) {
+         logger_log(raop->logger, LOGGER_INFO, "ignoring AirPlay video streaming request (use option -hls to activate HLS support)");
+         return;
+     }
+ 
+     const char *client_session_id = http_request_get_header(request, "X-Apple-Session-ID");
+     const char *host = http_request_get_header(request, "Host");
+-    hls_request =  (host && !cseq && !client_session_id);
++    hls_request =  (host && !cseq && !client_session_id && is_hls_stream);
+ 
+     if (conn->connection_type == CONNECTION_TYPE_UNKNOWN) {
+         if (cseq || ble) {
+@@ -321,12 +322,14 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+                     raop_ntp_stop(raop_ntp);
+                 }
+             }
+-        } else if (host) {
++        } else if (is_hls_stream) {
+             logger_log(raop->logger, LOGGER_DEBUG, "New connection %p identified as Connection type HLS", ptr);            
+             httpd_set_connection_type(raop->httpd, ptr, CONNECTION_TYPE_HLS);
+             conn->connection_type = CONNECTION_TYPE_HLS;
+         } else {
+-            logger_log(raop->logger, LOGGER_WARNING, "connection from unknown connection type");
++            logger_log(raop->logger, LOGGER_DEBUG, "New connection %p identified as Connection type AirPlay", ptr);
++            httpd_set_connection_type(raop->httpd, ptr, CONNECTION_TYPE_AIRPLAY);
++            conn->connection_type = CONNECTION_TYPE_AIRPLAY;
+         }	  
+     }
+ 
+@@ -403,7 +406,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+ 
+     logger_log(raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
+     raop_handler_t handler = NULL;
+-    if (!hls_request && !strcmp(protocol, "RTSP/1.0")) {
++    if (hls_request) {
++        handler = &http_handler_hls;
++    } else {
+         if (!strcmp(method, "POST")) {
+             if (!strcmp(url, "/feedback")) {
+                 handler = &raop_handler_feedback;
+@@ -417,34 +422,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+                 handler = &raop_handler_pairverify;
+             } else if (!strcmp(url, "/fp-setup")) {
+                 handler = &raop_handler_fpsetup;
++            } else if (!strcmp(url, "/fp-setup2")) {
++                handler = &http_handler_fpsetup2;
+             } else if (!strcmp(url, "/audioMode")) {
+                 handler = &raop_handler_audiomode;
+-            }
+-        } else if (!strcmp(method, "GET")) {
+-            if (strstr(url, "/info")) {
+-                handler = &raop_handler_info;
+-            }
+-        } else if (!strcmp(method, "OPTIONS")) {
+-            handler = &raop_handler_options;
+-        } else if (!strcmp(method, "SETUP")) {
+-            raop->hls_pending = false;
+-            handler = &raop_handler_setup;
+-        } else if (!strcmp(method, "GET_PARAMETER")) {
+-            handler = &raop_handler_get_parameter;
+-        } else if (!strcmp(method, "SET_PARAMETER")) {
+-            handler = &raop_handler_set_parameter;
+-        } else if (!strcmp(method, "RECORD")) {
+-            handler = &raop_handler_record;
+-        } else if (!strcmp(method, "FLUSH")) {
+-            handler = &raop_handler_flush;
+-        } else if (!strcmp(method, "TEARDOWN")) {
+-            handler = &raop_handler_teardown;
+-        } else {
+-            http_response_init(*response, protocol, 501, "Not Implemented");
+-        }
+-    } else if (!hls_request && !strcmp(protocol, "HTTP/1.1")) {
+-        if (!strcmp(method, "POST")) {
+-            if (!strcmp(url, "/reverse")) {
++            } else if (!strcmp(url, "/reverse")) {
+                 handler = &http_handler_reverse;
+             } else if (!strcmp(url, "/play")) {
+                 handler = &http_handler_play;
+@@ -458,23 +440,38 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+                 handler = &http_handler_stop;
+             } else if (!strcmp(url, "/action")) {
+                 handler = &http_handler_action;
+-            } else if (!strcmp(url, "/fp-setup2")) {
+-                handler = &http_handler_fpsetup2;
+             }
+         } else if (!strcmp(method, "GET")) {
+-            if (!strcmp(url, "/server-info")) {
++            if (strstr(url, "/info")) {
++                handler = &raop_handler_info;
++            } else if (!strcmp(url, "/server-info")) {
+                 raop->hls_pending = true;
+                 handler = &http_handler_server_info;
+             } else if (!strcmp(url, "/playback-info")) {
+                 handler = &http_handler_playback_info;
+             }
++        } else if (!strcmp(method, "OPTIONS")) {
++            handler = &raop_handler_options;
++        } else if (!strcmp(method, "SETUP")) {
++            raop->hls_pending = false;
++            handler = &raop_handler_setup;
++        } else if (!strcmp(method, "GET_PARAMETER")) {
++            handler = &raop_handler_get_parameter;
++        } else if (!strcmp(method, "SET_PARAMETER")) {
++            handler = &raop_handler_set_parameter;
++        } else if (!strcmp(method, "RECORD")) {
++            handler = &raop_handler_record;
++        } else if (!strcmp(method, "FLUSH")) {
++            handler = &raop_handler_flush;
++        } else if (!strcmp(method, "TEARDOWN")) {
++            handler = &raop_handler_teardown;
+         } else if (!strcmp(method, "PUT")) {
+             if (!strncmp (url, "/setProperty?", strlen("/setProperty?"))) {
+                 handler = &http_handler_set_property;
+             }
++        } else {
++            http_response_init(*response, protocol, 501, "Not Implemented");
+         }
+-    } else if (hls_request) {
+-        handler = &http_handler_hls;
+     }
+ 
+     if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index 9420600..79915d5 100644
+index 9420600..690ed8d 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -139,9 +139,23 @@ raop_handler_info(raop_conn_t *conn,
@@ -41,4 +255,13 @@ index 9420600..79915d5 100644
 +
      plist_t vv_node = plist_new_uint(strtol(AIRPLAY_VV, NULL, 10));
      plist_dict_set_item(res_node, "vv", vv_node);
+ 
+@@ -161,7 +175,7 @@ raop_handler_info(raop_conn_t *conn,
+     plist_dict_set_item(res_node, "model", model_node);
+ 
+     /* dont need anything below here in the Bluetooth LE response */
+-    if (cseq == NULL) {
++    if (url && (strstr(url, txtAirPlay) || strstr(url, txtRAOP))) {
+         goto finished;
+     }
  

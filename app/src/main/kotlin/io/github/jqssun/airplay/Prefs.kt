@@ -46,5 +46,5 @@ object Prefs {
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = true
     const val ADVERTISE_AUDIO = "advertise_audio"; const val DEF_ADVERTISE_AUDIO = true
     const val LAUNCH_ON_CONNECT = "launch_on_connect"; const val DEF_LAUNCH_ON_CONNECT = true
-    const val DEVICE_MODEL = "device_model"; const val DEF_DEVICE_MODEL = "AirPort10,115"
+    const val DEVICE_MODEL = "device_model"; const val DEF_DEVICE_MODEL = "AppleTV6,2"
 }
