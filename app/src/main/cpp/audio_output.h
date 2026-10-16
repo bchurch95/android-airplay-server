@@ -31,8 +31,8 @@ public:
         int sampleRate = stream->getSampleRate();
         int64_t hwLatencyNs = 0;
         if (sampleRate > 0) {
-            // Meta Portal hardware latency: queued buffer frames + 27ms Qualcomm Hexagon DSP / AudioFlinger mixer DAC path
-            hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate + 27000000LL;
+            // Meta Portal hardware latency: queued buffer frames in AAudio HAL buffer
+            hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate;
         }
         static int s_cbCount = 0;
         if ((s_cbCount++ % 200) == 1 && mLog) {
