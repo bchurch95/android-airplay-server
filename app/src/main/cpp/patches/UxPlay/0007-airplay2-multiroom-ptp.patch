@@ -934,7 +934,7 @@ index 61aaa71..17180bc 100644
  uint64_t raop_ntp_get_video_arrival_offset(raop_ntp_t* raop_ntp);
  
 diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
-index 35d42df..33a0531 100644
+index 35d42df..a8181d3 100644
 --- a/lib/raop_rtp.c
 +++ b/lib/raop_rtp.c
 @@ -21,6 +21,8 @@
@@ -1041,10 +1041,18 @@ index 35d42df..33a0531 100644
              } else {
              // Render continuous buffer entries
                  void *payload = NULL;
-@@ -690,6 +735,448 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
+@@ -690,6 +735,459 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
      MUTEX_UNLOCK(raop_rtp->run_mutex);
  }
  
++
++static inline uint64_t
++raop_mono_ns(void)
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (uint64_t)ts.tv_sec * SECOND_IN_NSECS + (uint64_t)ts.tv_nsec;
++}
 +
 +static int
 +raop_rtp_read_exact(raop_rtp_t *raop_rtp, int sock, unsigned char *buf, int len)
@@ -1172,7 +1180,7 @@ index 35d42df..33a0531 100644
 +        goto exit_thread;
 +    }
 +
-+    uint64_t thread_start_ns = raop_ntp_get_local_time();
++    uint64_t thread_start_ns = raop_mono_ns();
 +    const uint64_t lead_ns = 600000000ULL; /* Keep ~600ms ahead in TimelineBuffer */
 +    const unsigned int spf = (raop_rtp->spf > 0) ? raop_rtp->spf : 1024;
 +    uint32_t pkt_count = 0;
@@ -1299,11 +1307,14 @@ index 35d42df..33a0531 100644
 +                            seqnum < (uint32_t)raop_rtp->flush_until_seq;
 +            MUTEX_UNLOCK(raop_rtp->run_mutex);
 +            if (in_flush) goto next_packet;
-+            uint64_t now_ns = raop_ntp_get_local_time();
++            uint64_t now_ns = raop_mono_ns();
 +            if (a_valid) {
 +                int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
 +                int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
-+                pts_local_ns = (uint64_t)((int64_t)a_local + off_ns);
++                /* 27ms acoustic DAC latency advance measured via cross-correlation with HomePod */
++                const int64_t hal_latency_ns = 27000000LL;
++                int64_t target_pts = (int64_t)a_local + off_ns - hal_latency_ns;
++                pts_local_ns = (uint64_t)(target_pts > 0 ? target_pts : 0);
 +                /* pace: keep decoded audio at most lead_ns ahead of its play time */
 +                if ((int64_t)(pts_local_ns - now_ns) <= (int64_t)lead_ns) break;
 +            } else if (!a_ever && (now_ns - thread_start_ns) > 2000000000ULL) {
@@ -1420,7 +1431,7 @@ index 35d42df..33a0531 100644
 +    }
 +    raop_rtp->buffered_rate = rate;
 +    if (rate != 0) {
-+        uint64_t local_mono_ns = raop_ntp_get_local_time();
++        uint64_t local_mono_ns = raop_mono_ns();
 +        uint64_t calc_anchor = local_mono_ns;
 +        if (net_secs > 0) {
 +            uint64_t secs = net_secs;
@@ -1490,7 +1501,7 @@ index 35d42df..33a0531 100644
  void
  raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume)
  {
-@@ -822,6 +1309,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
+@@ -822,6 +1320,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
          CLOSESOCKET(raop_rtp->dsock);
          raop_rtp->dsock = -1;
      }

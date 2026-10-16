@@ -677,6 +677,14 @@ rtp_c = rtp_c.replace(raw_target, raw_repl, 1)
 
 # Add TCP Buffered Audio thread and helper functions before raop_rtp_set_volume
 buffered_code = '''
+static inline uint64_t
+raop_mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * SECOND_IN_NSECS + (uint64_t)ts.tv_nsec;
+}
+
 static int
 raop_rtp_read_exact(raop_rtp_t *raop_rtp, int sock, unsigned char *buf, int len)
 {
@@ -803,7 +811,7 @@ raop_rtp_thread_tcp(void *arg)
         goto exit_thread;
     }
 
-    uint64_t thread_start_ns = raop_ntp_get_local_time();
+    uint64_t thread_start_ns = raop_mono_ns();
     const uint64_t lead_ns = 600000000ULL; /* Keep ~600ms ahead in TimelineBuffer */
     const unsigned int spf = (raop_rtp->spf > 0) ? raop_rtp->spf : 1024;
     uint32_t pkt_count = 0;
@@ -930,11 +938,14 @@ raop_rtp_thread_tcp(void *arg)
                             seqnum < (uint32_t)raop_rtp->flush_until_seq;
             MUTEX_UNLOCK(raop_rtp->run_mutex);
             if (in_flush) goto next_packet;
-            uint64_t now_ns = raop_ntp_get_local_time();
+            uint64_t now_ns = raop_mono_ns();
             if (a_valid) {
                 int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
                 int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
-                pts_local_ns = (uint64_t)((int64_t)a_local + off_ns);
+                /* 27ms acoustic DAC latency advance measured via cross-correlation with HomePod */
+                const int64_t hal_latency_ns = 27000000LL;
+                int64_t target_pts = (int64_t)a_local + off_ns - hal_latency_ns;
+                pts_local_ns = (uint64_t)(target_pts > 0 ? target_pts : 0);
                 /* pace: keep decoded audio at most lead_ns ahead of its play time */
                 if ((int64_t)(pts_local_ns - now_ns) <= (int64_t)lead_ns) break;
             } else if (!a_ever && (now_ns - thread_start_ns) > 2000000000ULL) {
@@ -1051,7 +1062,7 @@ raop_rtp_set_anchor(raop_rtp_t *raop_rtp, uint32_t rate, uint32_t rtp_time, uint
     }
     raop_rtp->buffered_rate = rate;
     if (rate != 0) {
-        uint64_t local_mono_ns = raop_ntp_get_local_time();
+        uint64_t local_mono_ns = raop_mono_ns();
         uint64_t calc_anchor = local_mono_ns;
         if (net_secs > 0) {
             uint64_t secs = net_secs;
