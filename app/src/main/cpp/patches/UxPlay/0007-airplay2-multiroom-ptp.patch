@@ -315,7 +315,7 @@ index c86393f..86a21c6 100644
  
      if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..960c389 100644
+index b779ece..ad95cf7 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -106,7 +106,7 @@ raop_handler_info(raop_conn_t *conn,
@@ -448,7 +448,67 @@ index b779ece..960c389 100644
      }
  
      // Process stream setup requests
-@@ -1214,6 +1252,24 @@ raop_handler_record(raop_conn_t *conn,
+@@ -968,7 +1006,9 @@ raop_handler_setup(raop_conn_t *conn,
+ 
+                 break;
+                 }
+-            case 96: {
++            case 96:
++            case 100:
++            case 103: {
+                 // Audio
+                 unsigned short cport = raop->control_lport, dport = raop->data_lport; 
+                 unsigned short remote_cport = 0;
+@@ -977,12 +1017,16 @@ raop_handler_setup(raop_conn_t *conn,
+ 
+                 uint64_t uint_val = 0;
+                 plist_t req_stream_control_port_node = plist_dict_get_item(req_stream_node, "controlPort");
+-                plist_get_uint_val(req_stream_control_port_node, &uint_val);
+-                remote_cport = (unsigned short) uint_val;   /* must != 0 to activate audio resend requests */
++                if (req_stream_control_port_node) {
++                    plist_get_uint_val(req_stream_control_port_node, &uint_val);
++                    remote_cport = (unsigned short) uint_val;   /* must != 0 to activate audio resend requests */
++                }
+ 
+                 plist_t req_stream_ct_node = plist_dict_get_item(req_stream_node, "ct");
+-                plist_get_uint_val(req_stream_ct_node, &uint_val);
+-                ct = (unsigned char) uint_val;
++                if (req_stream_ct_node) {
++                    plist_get_uint_val(req_stream_ct_node, &uint_val);
++                    ct = (unsigned char) uint_val;
++                }
+ 
+                 if (raop->callbacks.audio_get_format) {
+                     /* get additional audio format parameters  */
+@@ -993,11 +1037,15 @@ raop_handler_setup(raop_conn_t *conn,
+                     uint8_t bool_val = 0;
+ 
+                     plist_t req_stream_spf_node = plist_dict_get_item(req_stream_node, "spf");
+-                    plist_get_uint_val(req_stream_spf_node, &uint_val);
+-                    spf = (unsigned short) uint_val;
++                    if (req_stream_spf_node) {
++                        plist_get_uint_val(req_stream_spf_node, &uint_val);
++                        spf = (unsigned short) uint_val;
++                    }
+ 
+                     plist_t req_stream_audio_format_node = plist_dict_get_item(req_stream_node, "audioFormat");
+-                    plist_get_uint_val(req_stream_audio_format_node, &audioFormat);
++                    if (req_stream_audio_format_node) {
++                        plist_get_uint_val(req_stream_audio_format_node, &audioFormat);
++                    }
+ 
+                     plist_t req_stream_is_media_node = plist_dict_get_item(req_stream_node, "isMedia");
+                     if (req_stream_is_media_node) {
+@@ -1029,7 +1077,7 @@ raop_handler_setup(raop_conn_t *conn,
+                 plist_t res_stream_node = plist_new_dict();
+                 plist_t res_stream_data_port_node = plist_new_uint(dport);
+                 plist_t res_stream_control_port_node = plist_new_uint(cport);
+-                plist_t res_stream_type_node = plist_new_uint(96);
++                plist_t res_stream_type_node = plist_new_uint(type);
+                 plist_dict_set_item(res_stream_node, "dataPort", res_stream_data_port_node);
+                 plist_dict_set_item(res_stream_node, "controlPort", res_stream_control_port_node);
+                 plist_dict_set_item(res_stream_node, "type", res_stream_type_node);
+@@ -1214,6 +1262,24 @@ raop_handler_record(raop_conn_t *conn,
      http_response_add_header(response, "Audio-Jack-Status", "connected; type=analog");
  }
  
@@ -473,3 +533,12 @@ index b779ece..960c389 100644
  static void
  raop_handler_flush(raop_conn_t *conn,
                        http_request_t *request, http_response_t *response,
+@@ -1259,7 +1325,7 @@ raop_handler_teardown(raop_conn_t *conn,
+             plist_t req_stream_node = plist_array_get_item(req_streams_node,i);
+             plist_t req_stream_type_node = plist_dict_get_item(req_stream_node, "type");
+             plist_get_uint_val(req_stream_type_node, &val);
+-            if (val == 96) {
++            if (val == 96 || val == 100 || val == 103) {
+                 teardown_96 = true;
+             } else if (val == 110) { 
+                 teardown_110 = true;
