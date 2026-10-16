@@ -14,7 +14,7 @@ index 03f2dcb..c2f1c08 100644
  /* use old protocol for audio AES key if client's User-Agent string is contained in these strings */
  /* replace xxx by any new User-Agent string as needed */
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index b92bf75..2ea84d7 100644
+index 7123c96..7aa6904 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
 @@ -53,18 +53,8 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
@@ -96,10 +96,10 @@ index b92bf75..2ea84d7 100644
      http_response_add_header(response, "Content-Type", "text/x-apple-plist+xml");
      free(hw_addr);
 diff --git a/lib/raop.c b/lib/raop.c
-index b6fc8f3..7adb6f0 100644
+index c86393f..69f38d8 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
-@@ -260,14 +260,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -261,14 +261,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
      }
  
   /* this rejects messages from _airplay._tcp for video streaming protocol unless bool raop->hls_support is true*/   
@@ -117,7 +117,7 @@ index b6fc8f3..7adb6f0 100644
  
      if (conn->connection_type == CONNECTION_TYPE_UNKNOWN) {
          if (cseq || ble) {
-@@ -321,12 +322,14 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -322,12 +323,14 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                      raop_ntp_stop(raop_ntp);
                  }
              }
@@ -134,7 +134,7 @@ index b6fc8f3..7adb6f0 100644
          }	  
      }
  
-@@ -403,7 +406,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -404,7 +407,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
  
      logger_log(raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
      raop_handler_t handler = NULL;
@@ -145,7 +145,7 @@ index b6fc8f3..7adb6f0 100644
          if (!strcmp(method, "POST")) {
              if (!strcmp(url, "/feedback")) {
                  handler = &raop_handler_feedback;
-@@ -417,34 +422,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -418,34 +423,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &raop_handler_pairverify;
              } else if (!strcmp(url, "/fp-setup")) {
                  handler = &raop_handler_fpsetup;
@@ -183,7 +183,7 @@ index b6fc8f3..7adb6f0 100644
                  handler = &http_handler_reverse;
              } else if (!strcmp(url, "/play")) {
                  handler = &http_handler_play;
-@@ -458,23 +440,38 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -459,8 +441,6 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_stop;
              } else if (!strcmp(url, "/action")) {
                  handler = &http_handler_action;
@@ -191,14 +191,13 @@ index b6fc8f3..7adb6f0 100644
 -                handler = &http_handler_fpsetup2;
              }
          } else if (!strcmp(method, "GET")) {
--            if (!strcmp(url, "/server-info")) {
-+            if (strstr(url, "/info")) {
-+                handler = &raop_handler_info;
-+            } else if (!strcmp(url, "/server-info")) {
-                 raop->hls_pending = true;
+             if (!strcmp(url, "/server-info")) {
+@@ -468,14 +448,31 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_server_info;
              } else if (!strcmp(url, "/playback-info")) {
                  handler = &http_handler_playback_info;
++            } else if (strstr(url, "/info")) {
++                handler = &raop_handler_info;
              }
 +        } else if (!strcmp(method, "OPTIONS")) {
 +            handler = &raop_handler_options;
@@ -228,7 +227,7 @@ index b6fc8f3..7adb6f0 100644
  
      if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index 9420600..690ed8d 100644
+index b779ece..1128819 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -139,9 +139,23 @@ raop_handler_info(raop_conn_t *conn,

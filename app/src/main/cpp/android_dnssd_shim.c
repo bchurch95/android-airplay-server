@@ -114,6 +114,8 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "md", RAOP_MD);
     _txt_set(rec, "rhd", RAOP_RHD);
     _txt_set(rec, "gid", pi_unique);
+    _txt_set(rec, "pi", pi_unique);
+    _txt_set(rec, "protovers", "1.1");
 
     switch (dnssd->pin_pw) {
     case 2:
