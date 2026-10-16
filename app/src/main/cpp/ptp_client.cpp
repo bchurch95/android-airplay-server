@@ -2,6 +2,7 @@
 #include "audio_time.h"
 
 #include <arpa/inet.h>
+#include <endian.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -185,7 +186,7 @@ void PtpClient::generalLoop() {
             if (len >= (ssize_t)(sizeof(PtpHeader) + sizeof(PtpTimestamp))) {
                 auto *ts = reinterpret_cast<PtpTimestamp *>(buffer + sizeof(PtpHeader));
                 int64_t preciseT1 = parsePtpTimestampNs(*ts);
-                int64_t correction = ntohll(hdr->correctionField) >> 16;
+                int64_t correction = (int64_t)(be64toh((uint64_t)hdr->correctionField) >> 16);
                 preciseT1 += correction;
                 // Refine offset with precise timestamp
             }
