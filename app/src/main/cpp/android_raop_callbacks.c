@@ -103,6 +103,7 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
 /* --- RAOP callback implementations --- */
 
 static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
+    if (!data || data->data_len <= 0) return;
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     if (!ctx->audio_engine || !data->data || data->data_len <= 0) return;
     int64_t pts_ns = 0;
@@ -121,7 +122,7 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
             pts_ns = (int64_t)data->ntp_time_local;
         }
         static uint32_t s_pkt_log = 0;
-        if (s_pkt_log++ < 5) {
+        if ((s_pkt_log++ % 200) == 1) {
             LOGI("_audio_process: ct=%d len=%d pts_ns=%lld (now=%lld diff=%lldms)",
                  data->ct, data->data_len, (long long)pts_ns, (long long)mono_ns,
                  (long long)((pts_ns - mono_ns) / 1000000LL));

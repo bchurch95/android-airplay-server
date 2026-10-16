@@ -934,7 +934,7 @@ index 61aaa71..17180bc 100644
  uint64_t raop_ntp_get_video_arrival_offset(raop_ntp_t* raop_ntp);
  
 diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
-index 35d42df..e9c69c6 100644
+index 35d42df..33d5f6f 100644
 --- a/lib/raop_rtp.c
 +++ b/lib/raop_rtp.c
 @@ -21,6 +21,8 @@
@@ -1041,7 +1041,7 @@ index 35d42df..e9c69c6 100644
              } else {
              // Render continuous buffer entries
                  void *payload = NULL;
-@@ -690,6 +735,507 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
+@@ -690,6 +735,515 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
      MUTEX_UNLOCK(raop_rtp->run_mutex);
  }
  
@@ -1302,6 +1302,10 @@ index 35d42df..e9c69c6 100644
 +        }
 +        pkt_count++;
 +
++        if (plaintext_len <= 0) {
++            goto next_packet;
++        }
++
 +        /* Anchor-time sync (PTP fallback: unrooted Android cannot bind ports 319/320).
 +         * Hold the packet until SETRATEANCHORTIME (rate=1) has supplied an anchor, then
 +         * derive its absolute presentation time:
@@ -1334,6 +1338,10 @@ index 35d42df..e9c69c6 100644
 +            uint64_t now_ns = raop_mono_ns();
 +            if (a_valid) {
 +                int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
++                if (frames_from_anchor + (int32_t)spf <= 0) {
++                    /* Stale audio packet strictly before playback anchor: discard */
++                    goto next_packet;
++                }
 +                int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
 +                /* Target PTS is the exact presentation time scheduled by the AirPlay 2 sender */
 +                int64_t target_pts = (int64_t)a_local + off_ns;
@@ -1549,7 +1557,7 @@ index 35d42df..e9c69c6 100644
  void
  raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume)
  {
-@@ -822,6 +1368,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
+@@ -822,6 +1376,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
          CLOSESOCKET(raop_rtp->dsock);
          raop_rtp->dsock = -1;
      }

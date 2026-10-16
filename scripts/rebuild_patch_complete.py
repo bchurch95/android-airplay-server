@@ -933,6 +933,10 @@ raop_rtp_thread_tcp(void *arg)
         }
         pkt_count++;
 
+        if (plaintext_len <= 0) {
+            goto next_packet;
+        }
+
         /* Anchor-time sync (PTP fallback: unrooted Android cannot bind ports 319/320).
          * Hold the packet until SETRATEANCHORTIME (rate=1) has supplied an anchor, then
          * derive its absolute presentation time:
@@ -965,6 +969,10 @@ raop_rtp_thread_tcp(void *arg)
             uint64_t now_ns = raop_mono_ns();
             if (a_valid) {
                 int32_t frames_from_anchor = (int32_t)(rtp_timestamp - a_rtp);
+                if (frames_from_anchor + (int32_t)spf <= 0) {
+                    /* Stale audio packet strictly before playback anchor: discard */
+                    goto next_packet;
+                }
                 int64_t off_ns = (int64_t)((double)frames_from_anchor * raop_rtp->rtp_clock_rate);
                 /* Target PTS is the exact presentation time scheduled by the AirPlay 2 sender */
                 int64_t target_pts = (int64_t)a_local + off_ns;

@@ -279,6 +279,7 @@ public:
             mRing.skip(mRing.available());
             mHeadPtsNs.store(0, std::memory_order_release);
             mPriming = true;
+            mPlaying = false;
             mPrimeSilenceFrames = 0;
             mAboveCapSinceNs = 0;
             mUnderran.store(true, std::memory_order_relaxed);
@@ -288,31 +289,52 @@ public:
         const int64_t now = monoNs();
 
         int64_t headPts = mHeadPtsNs.load(std::memory_order_acquire);
-        size_t leadSilenceFrames = 0;
-        if (headPts > 0) {
-            mPriming = false;
-            // Frame 0 written to the buffer at 'now' reaches the DAC/speaker at (now + hardwareLatencyNs).
-            // Scheduled playout condition: now + hardwareLatencyNs == headPts
+
+        // Playout time gating (AirPlay 2 presentation timestamps)
+        if (headPts > 0 && !mPlaying) {
             const int64_t playoutNowNs = now + hardwareLatencyNs;
             const int64_t leadNs = headPts - playoutNowNs;
             const int64_t burstNs = (int64_t)frames * NS_PER_SEC / mSampleRate;
+
             if (leadNs > burstNs) {
                 // Scheduled in future (> 1 callback buffer ahead): output silence while waiting
                 memset(out, 0, need * sizeof(int16_t));
                 return;
-            } else if (leadNs < -burstNs * 2) {
-                // Audio fell behind (> 2 buffers late): skip late frames to realign
-                size_t lateFrames = (size_t)((-leadNs) * mSampleRate / NS_PER_SEC);
-                size_t lateSamples = std::min(lateFrames * (size_t)mChannels, mRing.available());
-                if (lateSamples > 0) {
-                    mRing.skip(lateSamples);
-                    headPts += (int64_t)(lateSamples / mChannels) * NS_PER_SEC / mSampleRate;
-                    mHeadPtsNs.store(headPts, std::memory_order_relaxed);
-                }
             } else if (leadNs > 0) {
-                // Micro-lead within current buffer: pad exact number of silence frames at front
-                leadSilenceFrames = (size_t)(leadNs * mSampleRate / NS_PER_SEC);
+                // Initial presentation alignment: pad leadSilenceFrames at the start of the first burst
+                size_t leadSilenceFrames = (size_t)(leadNs * mSampleRate / NS_PER_SEC);
                 if (leadSilenceFrames > (size_t)frames) leadSilenceFrames = (size_t)frames;
+                const size_t silenceSamples = leadSilenceFrames * mChannels;
+                memset(out, 0, silenceSamples * sizeof(int16_t));
+                const size_t audioFrames = (size_t)frames - leadSilenceFrames;
+                const size_t audioNeed = audioFrames * mChannels;
+                const size_t got = mRing.read(out + silenceSamples, audioNeed);
+                if (got < audioNeed) {
+                    memset(out + silenceSamples + got, 0, (audioNeed - got) * sizeof(int16_t));
+                }
+                headPts += (int64_t)audioFrames * NS_PER_SEC / mSampleRate;
+                mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+                mPlaying = true;
+                mPriming = false;
+                return;
+            } else {
+                // Initial presentation time has arrived (leadNs <= 0): start continuous playback
+                mPlaying = true;
+                mPriming = false;
+            }
+        }
+
+        // Catastrophic desync check during playback (> 500ms behind): flush and re-anchor
+        if (mPlaying && headPts > 0) {
+            const int64_t playoutNowNs = now + hardwareLatencyNs;
+            const int64_t lagNs = playoutNowNs - headPts;
+            if (lagNs > 500000000LL) {
+                mRing.skip(mRing.available());
+                mHeadPtsNs.store(0, std::memory_order_release);
+                mPlaying = false;
+                mPriming = true;
+                memset(out, 0, need * sizeof(int16_t));
+                return;
             }
         }
 
@@ -350,24 +372,11 @@ public:
             mPrimeSilenceFrames = 0;
         }
 
-        if (leadSilenceFrames > 0) {
-            const size_t silenceSamples = leadSilenceFrames * mChannels;
-            memset(out, 0, silenceSamples * sizeof(int16_t));
-            const size_t audioFrames = (size_t)frames - leadSilenceFrames;
-            const size_t audioNeed = audioFrames * mChannels;
-            const size_t got = mRing.read(out + silenceSamples, audioNeed);
-            if (got < audioNeed) {
-                memset(out + silenceSamples + got, 0, (audioNeed - got) * sizeof(int16_t));
-            }
-            headPts += (int64_t)audioFrames * NS_PER_SEC / mSampleRate;
-            mHeadPtsNs.store(headPts, std::memory_order_relaxed);
-            return;
-        }
-
         const size_t got = mRing.read(out, need);
         if (got < need) {
             memset(out + got, 0, (need - got) * sizeof(int16_t));
             mPriming = true;
+            mPlaying = false;
             mLastTrimBlockNs = now;  // hold off trims while rebuilding
             mUnderran.store(true, std::memory_order_relaxed);  // producer re-anchors
             mHeadPtsNs.store(0, std::memory_order_release);
@@ -391,6 +400,7 @@ public:
     void flushAndReprime() {
         mRing.skip(mRing.available());
         mHeadPtsNs.store(0, std::memory_order_release);
+        mPlaying = false;
         mPriming = true;
     }
 
@@ -445,6 +455,7 @@ private:
     SpscRing mRing;
     TimelineMetrics mMetrics;
     bool mPriming = true;                // stream start: buffer output to build cushion
+    bool mPlaying = false;               // active playout state after initial presentation gating
     uint32_t mPrimeSilenceFrames = 0;    // consumer-only: silence frames output while priming with partial data
     int64_t mLastTrimBlockNs = 0;        // consumer-only: last trim/underrun time (trim throttle)
     int64_t mAboveCapSinceNs = 0;        // consumer-only: when backlog first exceeded cap (0 = under)
