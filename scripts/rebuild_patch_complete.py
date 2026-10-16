@@ -775,34 +775,6 @@ raop_rtp_thread_tcp(void *arg)
     assert(raop_rtp);
     logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp started, waiting for TCP connection on port %u", raop_rtp->data_lport);
 
-    int client_sock = -1;
-    while (client_sock == -1) {
-        if (raop_rtp_process_events(raop_rtp, NULL)) {
-            goto exit_thread;
-        }
-        fd_set rfds;
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 20000; /* 20ms */
-        FD_ZERO(&rfds);
-        FD_SET(raop_rtp->tsock, &rfds);
-        int ret = select(raop_rtp->tsock + 1, &rfds, NULL, NULL, &tv);
-        if (ret > 0 && FD_ISSET(raop_rtp->tsock, &rfds)) {
-            struct sockaddr_storage caddr;
-            socklen_t caddrlen = sizeof(caddr);
-            client_sock = accept(raop_rtp->tsock, (struct sockaddr *)&caddr, &caddrlen);
-            if (client_sock != -1) {
-                MUTEX_LOCK(raop_rtp->run_mutex);
-                raop_rtp->tcp_client_sock = client_sock;
-                MUTEX_UNLOCK(raop_rtp->run_mutex);
-                logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: accepted TCP connection (sock=%d)", client_sock);
-            }
-        } else if (ret < 0 && errno != EINTR) {
-            logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: select on tsock failed: %d", errno);
-            goto exit_thread;
-        }
-    }
-
     unsigned char *packet = (unsigned char *)malloc(65536);
     unsigned char *plaintext = (unsigned char *)malloc(65536);
     if (!packet || !plaintext) {
@@ -815,10 +787,36 @@ raop_rtp_thread_tcp(void *arg)
     const uint64_t lead_ns = 600000000ULL; /* Keep ~600ms ahead in TimelineBuffer */
     const unsigned int spf = (raop_rtp->spf > 0) ? raop_rtp->spf : 1024;
     uint32_t pkt_count = 0;
+    int client_sock = -1;
 
     while (1) {
         if (raop_rtp_process_events(raop_rtp, NULL)) {
             break;
+        }
+
+        if (client_sock == -1) {
+            fd_set rfds;
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 20000; /* 20ms */
+            FD_ZERO(&rfds);
+            FD_SET(raop_rtp->tsock, &rfds);
+            int ret = select(raop_rtp->tsock + 1, &rfds, NULL, NULL, &tv);
+            if (ret > 0 && FD_ISSET(raop_rtp->tsock, &rfds)) {
+                struct sockaddr_storage caddr;
+                socklen_t caddrlen = sizeof(caddr);
+                client_sock = accept(raop_rtp->tsock, (struct sockaddr *)&caddr, &caddrlen);
+                if (client_sock != -1) {
+                    MUTEX_LOCK(raop_rtp->run_mutex);
+                    raop_rtp->tcp_client_sock = client_sock;
+                    MUTEX_UNLOCK(raop_rtp->run_mutex);
+                    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: accepted TCP connection (sock=%d)", client_sock);
+                }
+            } else if (ret < 0 && errno != EINTR) {
+                logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: select on tsock failed: %d", errno);
+                break;
+            }
+            continue;
         }
 
         /* Handle pending audio flush */
@@ -839,8 +837,13 @@ raop_rtp_thread_tcp(void *arg)
 
         unsigned char len_buf[2];
         if (raop_rtp_read_exact(raop_rtp, client_sock, len_buf, 2) < 0) {
-            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet length");
-            break;
+            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: client disconnected (sock=%d), waiting for new connection", client_sock);
+            MUTEX_LOCK(raop_rtp->run_mutex);
+            CLOSESOCKET(client_sock);
+            client_sock = -1;
+            raop_rtp->tcp_client_sock = -1;
+            MUTEX_UNLOCK(raop_rtp->run_mutex);
+            continue;
         }
         uint16_t packet_len = ((uint16_t)len_buf[0] << 8) | (uint16_t)len_buf[1];
         if (packet_len < 2) {
@@ -848,8 +851,13 @@ raop_rtp_thread_tcp(void *arg)
         }
         int nread = (int)packet_len - 2;
         if (raop_rtp_read_exact(raop_rtp, client_sock, packet, nread) < 0) {
-            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet body (%d bytes)", nread);
-            break;
+            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: client disconnected while reading body (sock=%d)", client_sock);
+            MUTEX_LOCK(raop_rtp->run_mutex);
+            CLOSESOCKET(client_sock);
+            client_sock = -1;
+            raop_rtp->tcp_client_sock = -1;
+            MUTEX_UNLOCK(raop_rtp->run_mutex);
+            continue;
         }
         if (nread < 36) {
             continue;
@@ -977,6 +985,10 @@ loop_end:
 
 exit_thread:
     MUTEX_LOCK(raop_rtp->run_mutex);
+    if (client_sock != -1) {
+        CLOSESOCKET(client_sock);
+        client_sock = -1;
+    }
     if (raop_rtp->tcp_client_sock != -1) {
         CLOSESOCKET(raop_rtp->tcp_client_sock);
         raop_rtp->tcp_client_sock = -1;
@@ -997,9 +1009,26 @@ raop_rtp_start_buffered_audio(raop_rtp_t *raop_rtp, unsigned short *control_rpor
     logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp starting buffered audio (type 103)");
 
     MUTEX_LOCK(raop_rtp->run_mutex);
-    if (raop_rtp->running || !raop_rtp->joined) {
+    if (raop_rtp->running) {
+        *control_lport = raop_rtp->control_lport;
+        *data_lport = raop_rtp->data_lport;
+        if (shk && shk_len > 0) {
+            int copy_len = (shk_len > 32) ? 32 : shk_len;
+            memcpy(raop_rtp->shk, shk, copy_len);
+            raop_rtp->shk_len = copy_len;
+        }
+        if (spf && *spf > 0) raop_rtp->spf = *spf;
+        if (ct && *ct > 0) raop_rtp->ct = *ct;
+        logger_log(raop_rtp->logger, LOGGER_INFO,
+                   "raop_rtp_start_buffered_audio already running, reusing session: dport=%u cport=%u",
+                   *data_lport, *control_lport);
         MUTEX_UNLOCK(raop_rtp->run_mutex);
         return;
+    }
+
+    if (!raop_rtp->joined) {
+        THREAD_JOIN(raop_rtp->thread);
+        raop_rtp->joined = 1;
     }
 
     raop_rtp->is_buffered = true;

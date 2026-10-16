@@ -288,14 +288,16 @@ public:
         const int64_t now = monoNs();
 
         int64_t headPts = mHeadPtsNs.load(std::memory_order_acquire);
+        size_t leadSilenceFrames = 0;
         if (headPts > 0) {
             int64_t leadNs = headPts - now;
-            if (leadNs > 10000000LL) {
-                // Scheduled in future (>10ms ahead): output silence while buffering
+            const int64_t burstNs = (int64_t)frames * NS_PER_SEC / mSampleRate;
+            if (leadNs > burstNs) {
+                // Scheduled in future (> 1 callback buffer ahead): output silence while waiting
                 memset(out, 0, need * sizeof(int16_t));
                 return;
-            } else if (leadNs < -60000000LL) {
-                // Audio fell behind (>60ms late): skip late frames to catch up
+            } else if (leadNs < -burstNs * 2) {
+                // Audio fell behind (> 2 buffers late): skip late frames to realign
                 size_t lateFrames = (size_t)((-leadNs) * mSampleRate / NS_PER_SEC);
                 size_t lateSamples = std::min(lateFrames * (size_t)mChannels, mRing.available());
                 if (lateSamples > 0) {
@@ -303,6 +305,10 @@ public:
                     headPts += (int64_t)(lateSamples / mChannels) * NS_PER_SEC / mSampleRate;
                     mHeadPtsNs.store(headPts, std::memory_order_relaxed);
                 }
+            } else if (leadNs > 0) {
+                // Micro-lead within current buffer: pad exact number of silence frames at front
+                leadSilenceFrames = (size_t)(leadNs * mSampleRate / NS_PER_SEC);
+                if (leadSilenceFrames > (size_t)frames) leadSilenceFrames = (size_t)frames;
             }
         }
 
@@ -338,6 +344,20 @@ public:
             }
             mPriming = false;
             mPrimeSilenceFrames = 0;
+        }
+
+        if (leadSilenceFrames > 0) {
+            const size_t silenceSamples = leadSilenceFrames * mChannels;
+            memset(out, 0, silenceSamples * sizeof(int16_t));
+            const size_t audioFrames = (size_t)frames - leadSilenceFrames;
+            const size_t audioNeed = audioFrames * mChannels;
+            const size_t got = mRing.read(out + silenceSamples, audioNeed);
+            if (got < audioNeed) {
+                memset(out + silenceSamples + got, 0, (audioNeed - got) * sizeof(int16_t));
+            }
+            headPts += (int64_t)audioFrames * NS_PER_SEC / mSampleRate;
+            mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+            return;
         }
 
         const size_t got = mRing.read(out, need);

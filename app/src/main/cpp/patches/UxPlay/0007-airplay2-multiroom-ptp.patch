@@ -934,7 +934,7 @@ index 61aaa71..17180bc 100644
  uint64_t raop_ntp_get_video_arrival_offset(raop_ntp_t* raop_ntp);
  
 diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
-index 35d42df..a8181d3 100644
+index 35d42df..cbdd15d 100644
 --- a/lib/raop_rtp.c
 +++ b/lib/raop_rtp.c
 @@ -21,6 +21,8 @@
@@ -1041,7 +1041,7 @@ index 35d42df..a8181d3 100644
              } else {
              // Render continuous buffer entries
                  void *payload = NULL;
-@@ -690,6 +735,459 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
+@@ -690,6 +735,488 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp,  unsigned short *control_rport, unsig
      MUTEX_UNLOCK(raop_rtp->run_mutex);
  }
  
@@ -1144,34 +1144,6 @@ index 35d42df..a8181d3 100644
 +    assert(raop_rtp);
 +    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp started, waiting for TCP connection on port %u", raop_rtp->data_lport);
 +
-+    int client_sock = -1;
-+    while (client_sock == -1) {
-+        if (raop_rtp_process_events(raop_rtp, NULL)) {
-+            goto exit_thread;
-+        }
-+        fd_set rfds;
-+        struct timeval tv;
-+        tv.tv_sec = 0;
-+        tv.tv_usec = 20000; /* 20ms */
-+        FD_ZERO(&rfds);
-+        FD_SET(raop_rtp->tsock, &rfds);
-+        int ret = select(raop_rtp->tsock + 1, &rfds, NULL, NULL, &tv);
-+        if (ret > 0 && FD_ISSET(raop_rtp->tsock, &rfds)) {
-+            struct sockaddr_storage caddr;
-+            socklen_t caddrlen = sizeof(caddr);
-+            client_sock = accept(raop_rtp->tsock, (struct sockaddr *)&caddr, &caddrlen);
-+            if (client_sock != -1) {
-+                MUTEX_LOCK(raop_rtp->run_mutex);
-+                raop_rtp->tcp_client_sock = client_sock;
-+                MUTEX_UNLOCK(raop_rtp->run_mutex);
-+                logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: accepted TCP connection (sock=%d)", client_sock);
-+            }
-+        } else if (ret < 0 && errno != EINTR) {
-+            logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: select on tsock failed: %d", errno);
-+            goto exit_thread;
-+        }
-+    }
-+
 +    unsigned char *packet = (unsigned char *)malloc(65536);
 +    unsigned char *plaintext = (unsigned char *)malloc(65536);
 +    if (!packet || !plaintext) {
@@ -1184,10 +1156,36 @@ index 35d42df..a8181d3 100644
 +    const uint64_t lead_ns = 600000000ULL; /* Keep ~600ms ahead in TimelineBuffer */
 +    const unsigned int spf = (raop_rtp->spf > 0) ? raop_rtp->spf : 1024;
 +    uint32_t pkt_count = 0;
++    int client_sock = -1;
 +
 +    while (1) {
 +        if (raop_rtp_process_events(raop_rtp, NULL)) {
 +            break;
++        }
++
++        if (client_sock == -1) {
++            fd_set rfds;
++            struct timeval tv;
++            tv.tv_sec = 0;
++            tv.tv_usec = 20000; /* 20ms */
++            FD_ZERO(&rfds);
++            FD_SET(raop_rtp->tsock, &rfds);
++            int ret = select(raop_rtp->tsock + 1, &rfds, NULL, NULL, &tv);
++            if (ret > 0 && FD_ISSET(raop_rtp->tsock, &rfds)) {
++                struct sockaddr_storage caddr;
++                socklen_t caddrlen = sizeof(caddr);
++                client_sock = accept(raop_rtp->tsock, (struct sockaddr *)&caddr, &caddrlen);
++                if (client_sock != -1) {
++                    MUTEX_LOCK(raop_rtp->run_mutex);
++                    raop_rtp->tcp_client_sock = client_sock;
++                    MUTEX_UNLOCK(raop_rtp->run_mutex);
++                    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: accepted TCP connection (sock=%d)", client_sock);
++                }
++            } else if (ret < 0 && errno != EINTR) {
++                logger_log(raop_rtp->logger, LOGGER_ERR, "raop_rtp_thread_tcp: select on tsock failed: %d", errno);
++                break;
++            }
++            continue;
 +        }
 +
 +        /* Handle pending audio flush */
@@ -1208,8 +1206,13 @@ index 35d42df..a8181d3 100644
 +
 +        unsigned char len_buf[2];
 +        if (raop_rtp_read_exact(raop_rtp, client_sock, len_buf, 2) < 0) {
-+            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet length");
-+            break;
++            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: client disconnected (sock=%d), waiting for new connection", client_sock);
++            MUTEX_LOCK(raop_rtp->run_mutex);
++            CLOSESOCKET(client_sock);
++            client_sock = -1;
++            raop_rtp->tcp_client_sock = -1;
++            MUTEX_UNLOCK(raop_rtp->run_mutex);
++            continue;
 +        }
 +        uint16_t packet_len = ((uint16_t)len_buf[0] << 8) | (uint16_t)len_buf[1];
 +        if (packet_len < 2) {
@@ -1217,8 +1220,13 @@ index 35d42df..a8181d3 100644
 +        }
 +        int nread = (int)packet_len - 2;
 +        if (raop_rtp_read_exact(raop_rtp, client_sock, packet, nread) < 0) {
-+            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: stream ended or stopped while reading packet body (%d bytes)", nread);
-+            break;
++            logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp_thread_tcp: client disconnected while reading body (sock=%d)", client_sock);
++            MUTEX_LOCK(raop_rtp->run_mutex);
++            CLOSESOCKET(client_sock);
++            client_sock = -1;
++            raop_rtp->tcp_client_sock = -1;
++            MUTEX_UNLOCK(raop_rtp->run_mutex);
++            continue;
 +        }
 +        if (nread < 36) {
 +            continue;
@@ -1346,6 +1354,10 @@ index 35d42df..a8181d3 100644
 +
 +exit_thread:
 +    MUTEX_LOCK(raop_rtp->run_mutex);
++    if (client_sock != -1) {
++        CLOSESOCKET(client_sock);
++        client_sock = -1;
++    }
 +    if (raop_rtp->tcp_client_sock != -1) {
 +        CLOSESOCKET(raop_rtp->tcp_client_sock);
 +        raop_rtp->tcp_client_sock = -1;
@@ -1366,9 +1378,26 @@ index 35d42df..a8181d3 100644
 +    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp starting buffered audio (type 103)");
 +
 +    MUTEX_LOCK(raop_rtp->run_mutex);
-+    if (raop_rtp->running || !raop_rtp->joined) {
++    if (raop_rtp->running) {
++        *control_lport = raop_rtp->control_lport;
++        *data_lport = raop_rtp->data_lport;
++        if (shk && shk_len > 0) {
++            int copy_len = (shk_len > 32) ? 32 : shk_len;
++            memcpy(raop_rtp->shk, shk, copy_len);
++            raop_rtp->shk_len = copy_len;
++        }
++        if (spf && *spf > 0) raop_rtp->spf = *spf;
++        if (ct && *ct > 0) raop_rtp->ct = *ct;
++        logger_log(raop_rtp->logger, LOGGER_INFO,
++                   "raop_rtp_start_buffered_audio already running, reusing session: dport=%u cport=%u",
++                   *data_lport, *control_lport);
 +        MUTEX_UNLOCK(raop_rtp->run_mutex);
 +        return;
++    }
++
++    if (!raop_rtp->joined) {
++        THREAD_JOIN(raop_rtp->thread);
++        raop_rtp->joined = 1;
 +    }
 +
 +    raop_rtp->is_buffered = true;
@@ -1501,7 +1530,7 @@ index 35d42df..a8181d3 100644
  void
  raop_rtp_set_volume(raop_rtp_t *raop_rtp, float volume)
  {
-@@ -822,6 +1320,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
+@@ -822,6 +1349,14 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
          CLOSESOCKET(raop_rtp->dsock);
          raop_rtp->dsock = -1;
      }
