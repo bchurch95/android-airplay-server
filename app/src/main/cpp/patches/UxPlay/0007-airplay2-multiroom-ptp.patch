@@ -14,7 +14,7 @@ index 03f2dcb..2206aea 100644
  /* use old protocol for audio AES key if client's User-Agent string is contained in these strings */
  /* replace xxx by any new User-Agent string as needed */
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index 7123c96..516c315 100644
+index 7123c96..857c587 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
 @@ -53,30 +53,23 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
@@ -103,8 +103,84 @@ index 7123c96..516c315 100644
      plist_free(r_node);
      http_response_add_header(response, "Content-Type", "text/x-apple-plist+xml");
      free(hw_addr);
+diff --git a/lib/http_request.c b/lib/http_request.c
+index ec030c4..50b7a19 100644
+--- a/lib/http_request.c
++++ b/lib/http_request.c
+@@ -29,6 +29,7 @@ struct http_request_s {
+ 
+     bool is_reverse;  // if true, this is a reverse-response from client
+     const char *method;
++    char *custom_method;
+     char *url;
+     char protocol[9];
+ 
+@@ -167,6 +168,9 @@ void
+ http_request_destroy(http_request_t *request)
+ {
+     if (request) {
++        if (request->custom_method) {
++            free(request->custom_method);
++        }
+         free(request->url);
+         for (int i = 0; i < request->headers_size; i++) {
+             free(request->headers[i]);
+@@ -182,7 +186,42 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
+ {
+     assert(request);
+ 
+-    int ret = llhttp_execute(&request->parser, data, datalen);
++    const char *parse_data = data;
++    char *allocated = NULL;
++
++    if (!request->method && !request->custom_method && datalen > 10) {
++        if (!strncmp(data, "SETPEERS ", 9)) {
++            request->custom_method = strdup("SETPEERS");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST     ", 9);
++                parse_data = allocated;
++            }
++        } else if (!strncmp(data, "SETRATEANCHORTIME ", 18)) {
++            request->custom_method = strdup("SETRATEANCHORTIME");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST              ", 18);
++                parse_data = allocated;
++            }
++        } else if (!strncmp(data, "SETRATE ", 8)) {
++            request->custom_method = strdup("SETRATE");
++            allocated = malloc(datalen);
++            if (allocated) {
++                memcpy(allocated, data, datalen);
++                memcpy(allocated, "POST    ", 8);
++                parse_data = allocated;
++            }
++        }
++    }
++
++    int ret = llhttp_execute(&request->parser, parse_data, datalen);
++
++    if (allocated) {
++        free(allocated);
++    }
+ 
+     /* support for "Upgrade" to reverse http ("PTTH/1.0") protocol */
+     llhttp_resume_after_upgrade(&request->parser);
+@@ -234,6 +273,9 @@ http_request_get_method(http_request_t *request)
+     if (request->is_reverse) {
+         return NULL;
+     }
++    if (request->custom_method) {
++        return request->custom_method;
++    }
+     return request->method;
+ }
+ 
 diff --git a/lib/raop.c b/lib/raop.c
-index c86393f..69f38d8 100644
+index c86393f..86a21c6 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
 @@ -261,14 +261,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
@@ -200,7 +276,7 @@ index c86393f..69f38d8 100644
              }
          } else if (!strcmp(method, "GET")) {
              if (!strcmp(url, "/server-info")) {
-@@ -468,14 +448,31 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+@@ -468,14 +448,35 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                  handler = &http_handler_server_info;
              } else if (!strcmp(url, "/playback-info")) {
                  handler = &http_handler_playback_info;
@@ -218,6 +294,10 @@ index c86393f..69f38d8 100644
 +            handler = &raop_handler_set_parameter;
 +        } else if (!strcmp(method, "RECORD")) {
 +            handler = &raop_handler_record;
++        } else if (!strcmp(method, "SETPEERS")) {
++            handler = &raop_handler_setpeers;
++        } else if (!strcmp(method, "SETRATEANCHORTIME") || !strcmp(method, "SETRATE")) {
++            handler = &raop_handler_setrateanchortime;
 +        } else if (!strcmp(method, "FLUSH")) {
 +            handler = &raop_handler_flush;
 +        } else if (!strcmp(method, "TEARDOWN")) {
@@ -235,7 +315,7 @@ index c86393f..69f38d8 100644
  
      if (handler != NULL) {
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index b779ece..0b1c595 100644
+index b779ece..960c389 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
 @@ -106,7 +106,7 @@ raop_handler_info(raop_conn_t *conn,
@@ -289,6 +369,15 @@ index b779ece..0b1c595 100644
          goto finished;
      }
  
+@@ -582,7 +599,7 @@ raop_handler_options(raop_conn_t *conn,
+                      http_request_t *request, http_response_t *response,
+                      char **response_data, int *response_datalen)
+ {
+-    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
++    http_response_add_header(response, "Public", "SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, SETPEERS, SETRATEANCHORTIME");
+ }
+ 
+ static void
 @@ -862,16 +879,20 @@ raop_handler_setup(raop_conn_t *conn,
          timing_protocol_t time_protocol = TP_NONE;
          plist_t req_timing_protocol_node = plist_dict_get_item(req_root_node, "timingProtocol");
@@ -359,3 +448,28 @@ index b779ece..0b1c595 100644
      }
  
      // Process stream setup requests
+@@ -1214,6 +1252,24 @@ raop_handler_record(raop_conn_t *conn,
+     http_response_add_header(response, "Audio-Jack-Status", "connected; type=analog");
+ }
+ 
++static void
++raop_handler_setpeers(raop_conn_t *conn,
++                      http_request_t *request, http_response_t *response,
++                      char **response_data, int *response_datalen)
++{
++    raop_t *raop = conn->raop;
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_setpeers: peer list acknowledged");
++}
++
++static void
++raop_handler_setrateanchortime(raop_conn_t *conn,
++                               http_request_t *request, http_response_t *response,
++                               char **response_data, int *response_datalen)
++{
++    raop_t *raop = conn->raop;
++    logger_log(raop->logger, LOGGER_INFO, "raop_handler_setrateanchortime: playback anchor acknowledged");
++}
++
+ static void
+ raop_handler_flush(raop_conn_t *conn,
+                       http_request_t *request, http_response_t *response,
