@@ -390,9 +390,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                             ) { Text("-1ms", style = MaterialTheme.typography.labelSmall) }
                             Button(
-                                onClick = { viewModel.setSyncOffsetMs(0) },
+                                onClick = { viewModel.setSyncOffsetMs(Prefs.DEF_SYNC_OFFSET_MS) },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                            ) { Text("0ms", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text("Default", style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { viewModel.setSyncOffsetMs(syncOffsetMs + 1) },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
