@@ -309,6 +309,16 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeGetServerName(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetAudioSyncOffsetMs(
+        JNIEnv *env, jobject thiz, jlong handle, jint offsetMs) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (ctx && ctx->cb_ctx.audio_engine) {
+        audio_engine_set_sync_offset_ms(ctx->cb_ctx.audio_engine, (int)offsetMs);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetPlist(
         JNIEnv *env, jobject thiz, jlong handle, jstring key, jint value) {
 
@@ -316,6 +326,9 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetPlist(
     if (!ctx || !ctx->raop) return;
     const char *key_c = env->GetStringUTFChars(key, NULL);
     raop_set_plist(ctx->raop, key_c, value);
+    if (strcmp(key_c, "audio_delay_micros") == 0 && ctx->cb_ctx.audio_engine) {
+        audio_engine_set_sync_offset_ms(ctx->cb_ctx.audio_engine, value / 1000);
+    }
     env->ReleaseStringUTFChars(key, key_c);
 }
 

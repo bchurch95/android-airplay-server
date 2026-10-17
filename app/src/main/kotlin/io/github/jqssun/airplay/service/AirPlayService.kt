@@ -339,6 +339,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         return START_NOT_STICKY
     }
 
+    fun setAudioSyncOffsetMs(offsetMs: Int) {
+        if (nativeHandle != 0L) {
+            NativeBridge.nativeSetAudioSyncOffsetMs(nativeHandle, offsetMs)
+        }
+    }
+
     fun startServer(name: String) {
         startServer(name, ensureServiceStarted = true)
     }
@@ -402,6 +408,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (audioLatencyMs >= 0) {
             NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
         }
+        val syncOffsetMs = prefs.getInt(Prefs.SYNC_OFFSET_MS, Prefs.DEF_SYNC_OFFSET_MS)
+        NativeBridge.nativeSetAudioSyncOffsetMs(nativeHandle, syncOffsetMs)
 
         // set display params
         lastOrientation = resources.configuration.orientation

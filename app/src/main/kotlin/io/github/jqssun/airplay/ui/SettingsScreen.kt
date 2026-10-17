@@ -56,6 +56,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val runInBackground by viewModel.runInBackground.collectAsState()
     val serverPort by viewModel.serverPort.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
+    val syncOffsetMs by viewModel.syncOffsetMs.collectAsState()
     val forceSwAlac by viewModel.forceSwAlac.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val developerOptions by viewModel.developerOptions.collectAsState()
@@ -319,6 +320,94 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 description = stringResource(R.string.setting_scheduled_output_buffer_release_desc),
                 checked = scheduledOutputBufferRelease,
                 onCheckedChange = { viewModel.setScheduledOutputBufferRelease(it) }
+            )
+
+            ListItem(
+                headlineContent = {
+                    Text(
+                        text = "Multi-Room Audio Sync",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        text = "Fine-tune delay relative to HomePod or other AirPlay speakers live while listening.\nNegative (-) delays Portal; positive (+) advances Portal.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            )
+
+            ListItem(
+                headlineContent = {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Current Sync Offset:",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = if (syncOffsetMs > 0) "+${syncOffsetMs} ms" else "${syncOffsetMs} ms",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        var sliderVal by remember(syncOffsetMs) { mutableFloatStateOf(syncOffsetMs.toFloat()) }
+                        Slider(
+                            value = sliderVal,
+                            onValueChange = {
+                                sliderVal = it
+                                viewModel.setSyncOffsetMs(it.roundToInt())
+                            },
+                            onValueChangeFinished = {
+                                viewModel.setSyncOffsetMs(sliderVal.roundToInt())
+                            },
+                            valueRange = -300f..300f,
+                            modifier = Modifier.fillMaxWidth().dpadFocus().dpadAdjust(
+                                onLeft = { viewModel.setSyncOffsetMs(syncOffsetMs - 5) },
+                                onRight = { viewModel.setSyncOffsetMs(syncOffsetMs + 5) }
+                            )
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs - 50) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("-50ms", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs - 10) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("-10ms", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs - 1) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("-1ms", style = MaterialTheme.typography.labelSmall) }
+                            Button(
+                                onClick = { viewModel.setSyncOffsetMs(0) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("0ms", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs + 1) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("+1ms", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs + 10) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("+10ms", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { viewModel.setSyncOffsetMs(syncOffsetMs + 50) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) { Text("+50ms", style = MaterialTheme.typography.labelSmall) }
+                        }
+                    }
+                }
             )
 
             SettingSwitch(

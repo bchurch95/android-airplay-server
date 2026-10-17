@@ -31,8 +31,8 @@ public:
         int sampleRate = stream->getSampleRate();
         int64_t hwLatencyNs = 0;
         if (sampleRate > 0) {
-            // Meta Portal hardware latency: queued buffer frames in AAudio HAL buffer
-            hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate;
+            // Meta Portal hardware latency: queued buffer frames in AAudio HAL buffer + user multi-room sync offset
+            hwLatencyNs = (int64_t)bufFrames * 1000000000LL / sampleRate + (mTimeline ? mTimeline->getSyncOffsetNs() : 0);
         }
         static int s_cbCount = 0;
         if ((s_cbCount++ % 200) == 1 && mLog) {

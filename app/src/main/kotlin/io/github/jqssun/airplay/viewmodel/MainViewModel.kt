@@ -171,6 +171,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _audioLatencyMs = MutableStateFlow(prefs.getInt(Prefs.AUDIO_LATENCY_MS, Prefs.DEF_AUDIO_LATENCY_MS))
     val audioLatencyMs: StateFlow<Int> = _audioLatencyMs.asStateFlow()
 
+    private val _syncOffsetMs = MutableStateFlow(prefs.getInt(Prefs.SYNC_OFFSET_MS, Prefs.DEF_SYNC_OFFSET_MS))
+    val syncOffsetMs: StateFlow<Int> = _syncOffsetMs.asStateFlow()
+
     private val _idlePreview = MutableStateFlow(prefs.getBoolean(Prefs.IDLE_PREVIEW, Prefs.DEF_IDLE_PREVIEW))
     val idlePreview: StateFlow<Boolean> = _idlePreview.asStateFlow()
 
@@ -403,6 +406,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply(); _applyByServerRestart() }
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply(); _applyByServerRestart() }
     fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply(); _applyByServerRestart() }
+    fun setSyncOffsetMs(v: Int) {
+        val clamped = v.coerceIn(-500, 500)
+        _syncOffsetMs.value = clamped
+        prefs.edit().putInt(Prefs.SYNC_OFFSET_MS, clamped).apply()
+        service?.setAudioSyncOffsetMs(clamped)
+    }
     fun setIdlePreview(v: Boolean) { _idlePreview.value = v; prefs.edit().putBoolean(Prefs.IDLE_PREVIEW, v).apply() }
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
@@ -438,6 +447,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // service binding
     fun bindService(svc: AirPlayService) {
         service = svc
+        svc.setAudioSyncOffsetMs(_syncOffsetMs.value)
         updateFromService()
     }
 

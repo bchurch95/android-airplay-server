@@ -48,6 +48,9 @@ void audio_engine_destroy(AudioEngine *engine);
 /* decode + play one encoded airplay packet; not concurrent with audio_engine_destroy */
 void audio_engine_decode(AudioEngine *engine, const uint8_t *data, int len, int ct, int64_t pts_ns);
 
+/* live user-adjustable audio sync offset in milliseconds (for AirPlay multi-room alignment) */
+void audio_engine_set_sync_offset_ms(AudioEngine *engine, int offsetMs);
+
 #ifdef __cplusplus
 }
 

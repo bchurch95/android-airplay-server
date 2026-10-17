@@ -273,6 +273,20 @@ public:
         mFlushRequested.store(true, std::memory_order_release);
     }
 
+    void setSyncOffsetNs(int64_t offsetNs) {
+        mSyncOffsetNs.store(offsetNs, std::memory_order_relaxed);
+    }
+
+    int64_t getSyncOffsetNs() const {
+        return mSyncOffsetNs.load(std::memory_order_relaxed);
+    }
+
+    void nudge(int64_t deltaNs) {
+        if (mPlaying) {
+            mLiveNudgeNs.fetch_add(deltaNs, std::memory_order_relaxed);
+        }
+    }
+
     // consumer: pop frames*channels samples into out, silence-padded on underrun
     void read(int16_t *out, int32_t frames, int64_t hardwareLatencyNs = 0) {
         if (mFlushRequested.exchange(false, std::memory_order_acquire)) {
@@ -289,6 +303,49 @@ public:
         const int64_t now = monoNs();
 
         int64_t headPts = mHeadPtsNs.load(std::memory_order_acquire);
+
+        // Handle live sync nudge requested while playing
+        int64_t nudge = mLiveNudgeNs.load(std::memory_order_relaxed);
+        if (nudge != 0 && mPlaying) {
+            if (nudge > 0) {
+                mLiveNudgeNs.store(0, std::memory_order_relaxed);
+                // Advance Portal playback: skip frames from ring buffer
+                size_t skipFrames = (size_t)(nudge * mSampleRate / NS_PER_SEC);
+                size_t skipSamples = skipFrames * mChannels;
+                if (skipSamples > mRing.available()) skipSamples = mRing.available();
+                mRing.skip(skipSamples);
+                if (headPts > 0) {
+                    headPts += (int64_t)(skipSamples / mChannels) * NS_PER_SEC / mSampleRate;
+                    mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+                }
+            } else {
+                // Delay Portal playback: pad silence frames
+                size_t totalSilenceFrames = (size_t)((-nudge) * mSampleRate / NS_PER_SEC);
+                size_t silenceThisCallback = totalSilenceFrames;
+                if (silenceThisCallback > (size_t)frames) {
+                    silenceThisCallback = (size_t)frames;
+                    int64_t remainingNs = (int64_t)(totalSilenceFrames - silenceThisCallback) * NS_PER_SEC / mSampleRate;
+                    mLiveNudgeNs.store(-remainingNs, std::memory_order_relaxed);
+                } else {
+                    mLiveNudgeNs.store(0, std::memory_order_relaxed);
+                }
+                const size_t silenceSamples = silenceThisCallback * mChannels;
+                memset(out, 0, silenceSamples * sizeof(int16_t));
+                const size_t audioFrames = (size_t)frames - silenceThisCallback;
+                if (audioFrames > 0) {
+                    const size_t audioNeed = audioFrames * mChannels;
+                    const size_t got = mRing.read(out + silenceSamples, audioNeed);
+                    if (got < audioNeed) {
+                        memset(out + silenceSamples + got, 0, (audioNeed - got) * sizeof(int16_t));
+                    }
+                }
+                if (headPts > 0) {
+                    headPts += (int64_t)audioFrames * NS_PER_SEC / mSampleRate;
+                    mHeadPtsNs.store(headPts, std::memory_order_relaxed);
+                }
+                return;
+            }
+        }
 
         // Playout time gating (AirPlay 2 presentation timestamps)
         if (headPts > 0 && !mPlaying) {
@@ -464,6 +521,8 @@ private:
     std::atomic<int64_t> mHeadPtsNs{0};        // presentation time at head of ring buffer
 
     int64_t mExpectedPtsNs = 0;          // presentation time expected at write head
+    std::atomic<int64_t> mSyncOffsetNs{0}; // user multi-room sync offset in ns
+    std::atomic<int64_t> mLiveNudgeNs{0};  // pending live adjustment in ns
 };
 
 #endif  // TIMELINE_BUFFER_H

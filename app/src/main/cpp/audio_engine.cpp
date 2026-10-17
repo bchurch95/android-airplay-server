@@ -95,6 +95,23 @@ struct AudioEngine {
         }
     }
 
+    void setSyncOffsetMs(int offsetMs) {
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        int64_t newOffsetNs = (int64_t)offsetMs * 1000000LL;
+        int64_t oldOffsetNs = mSyncOffsetNs.exchange(newOffsetNs, std::memory_order_relaxed);
+        int64_t deltaNs = newOffsetNs - oldOffsetNs;
+        if (mTimeline) {
+            mTimeline->setSyncOffsetNs(newOffsetNs);
+            if (deltaNs != 0) {
+                mTimeline->nudge(deltaNs);
+            }
+        }
+        if (mLog) {
+            mLog->info("AudioEngine: sync offset set to %d ms (delta=%lld ms)",
+                       offsetMs, (long long)(deltaNs / 1000000LL));
+        }
+    }
+
     // touches decoder: must not run concurrently with decode()
     void stop() {
         if (mOutput) mOutput->stop();
@@ -172,6 +189,7 @@ private:
         mTimeline = std::make_shared<TimelineBuffer>(mSampleRate, mChannels,
                                                      cfg.staticCushionMs, cfg.percentilePct,
                                                      cfg.lowLatency);
+        mTimeline->setSyncOffsetNs(mSyncOffsetNs.load(std::memory_order_relaxed));
         mOutput = AudioOutput::create(mSampleRate, mChannels, cfg.oboeBufferFrames,
                                       cfg.lowLatency, mTimeline, mLog);
         mApplied = std::make_unique<AudioConfig>(cfg);
@@ -186,6 +204,7 @@ private:
     // all other threads read them under mRebuildLock; mDecoder is decode-thread-only
     // teardown stop() requires caller to guarantee no in-flight or future decode() calls
 
+    std::atomic<int64_t> mSyncOffsetNs{0};
     std::mutex mRebuildLock;
     std::shared_ptr<TimelineBuffer> mTimeline; // guarded by mRebuildLock
     std::shared_ptr<AudioOutput> mOutput;      // guarded by mRebuildLock
@@ -266,6 +285,10 @@ void audio_engine_destroy(AudioEngine *engine) {
 }
 
 // decode straight from RAOP audio callback, no JNI crossing
+void audio_engine_set_sync_offset_ms(AudioEngine *engine, int offsetMs) {
+    if (engine) engine->setSyncOffsetMs(offsetMs);
+}
+
 void audio_engine_decode(AudioEngine *engine, const uint8_t *data, int len, int ct, int64_t pts_ns) {
     if (engine && data && len > 0) {
         engine->decode(data, (size_t)len, ct, pts_ns);
