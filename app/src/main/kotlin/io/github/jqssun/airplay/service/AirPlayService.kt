@@ -335,6 +335,22 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             val name = Prefs.getServerName(this, prefs)
             startServer(name, ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
+
+            if (intent.getBooleanExtra("from_boot", false)) {
+                lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                    for (delayMs in listOf(6000L, 11000L)) {
+                        kotlinx.coroutines.delay(delayMs)
+                        try {
+                            val homeIntent = packageManager.getLaunchIntentForPackage("com.portal.pleasewait")
+                                ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            homeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            startActivity(homeIntent)
+                        } catch (e: Exception) {
+                            Log.w("AirPlayService", "Failed to restore home on boot", e)
+                        }
+                    }
+                }
+            }
         }
         return START_NOT_STICKY
     }

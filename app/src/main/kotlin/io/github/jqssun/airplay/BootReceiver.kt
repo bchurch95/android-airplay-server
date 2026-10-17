@@ -16,6 +16,7 @@ class BootReceiver : BroadcastReceiver() {
 
         val serviceIntent = Intent(context, AirPlayService::class.java)
             .setAction(AirPlayService.ACTION_START_SERVER)
+            .putExtra("from_boot", true)
         ContextCompat.startForegroundService(context, serviceIntent)
     }
 }
